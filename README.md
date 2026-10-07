@@ -1,5 +1,7 @@
 # ChemLab
 
+This is the ChemLab project. I have just created the main structure of the projects.
+
 A modern chemical process simulation platform based on COBIA (CAPE-OPEN Binary Interop Architecture), cross-platform (Windows / Linux / macOS), implemented in C++17 / Qt6.
 
 ![alt text](image.png)
