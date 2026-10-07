@@ -1,0 +1,73 @@
+#ifndef QWT3D_AUTOPTR_H
+#define QWT3D_AUTOPTR_H
+
+namespace Qwt3D
+{
+
+/**
+ * @brief Simple auto pointer providing deep copies for raw pointer
+ * @details Requirements:\n
+ *          virtual T* T::clone() const;\n
+ *          T::destroy() const;\n
+ *          virtual ~T() private/protected\n\n
+ *          clone() is necessary for the pointer to preserve polymorphic behaviour.
+ *          The pointer requires also heap based objects with regard to the template
+ *          argument in order to be able to get ownership and control over destruction.
+ */
+template< typename T >
+class ClonePtr
+{
+public:
+    // Standard ctor
+    explicit ClonePtr(T* ptr = nullptr) : rawptr_(ptr)
+    {
+    }
+    // Dtor (calls T::destroy)
+    ~ClonePtr()
+    {
+        destroyRawPtr();
+    }
+
+    // Copy ctor (calls (virtual) clone())
+    ClonePtr(ClonePtr const& val)
+    {
+        rawptr_ = val.rawptr_->clone();
+    }
+
+    // Assignment in the same spirit as copy ctor
+    ClonePtr< T >& operator=(ClonePtr const& val)
+    {
+        if (this == &val)
+            return *this;
+
+        destroyRawPtr();
+        rawptr_ = val.rawptr_->clone();
+
+        return *this;
+    }
+
+    // Pointer-like access operator
+    T* operator->() const
+    {
+        return rawptr_;
+    }
+
+    // Dereferencing operator
+    T& operator*() const
+    {
+        return *rawptr_;
+    }
+
+private:
+    T* rawptr_;
+    void destroyRawPtr()
+    {
+        if (rawptr_)
+            rawptr_->destroy();
+        rawptr_ = nullptr;
+    }
+};
+
+}  // ns
+
+#endif  // QWT3D_AUTOPTR_H

@@ -1,0 +1,59 @@
+=======================================================
+Water - CAPE-OPEN steam/water property package
+Copyright (C) 2025 Jasper van Baten
+=======================================================
+
+LICENSE AGREEMENT
+
+   1. You can freely distribute this software component, provided that the 
+   complete distribution is copied without modifications and the redistribution 
+   will be free-of-charge.
+
+   2. You may not modify your copy or copies of this software component, unless:
+
+   - its use is for academic research or academic teaching purposes, and 
+   - its use is non-commercial, and 
+   - you will not distribute COM objects that use any of the CLSIDs 
+     in Water_dll.cpp or Water_dll.h
+   - you properly acknowledge the author by clearly stating in the software 
+     distribution: "this software is partly based on the IAPWS-97 CAPE-OPEN 
+     property package implementation of Jasper van Baten of AmsterCHEM."
+
+   3. You may not copy, modify, sub-license, or distribute this software component
+   or its source code except as expressly provided under this License. Any attempt 
+   otherwise to copy, modify, sub-license or distribute this software component 
+   or it source code is void, and will automatically terminate your rights under 
+   this License.
+
+   4. You are not required to accept this License, since you have not signed it. 
+   However, nothing else grants you permission to modify or distribute this 
+   software component or its source code or its derivative works. These actions 
+   are prohibited by law if you do not accept this License. Therefore, by 
+   distributing this software component or its source code, you indicate your 
+   acceptance of this License to do so, and all its terms and conditions for 
+   copying or distributing this software component or its source code.
+
+NO WARRANTY
+
+   5. BECAUSE THIS SOFTWARE COMPONENT IS LICENSED FREE OF CHARGE, THERE IS NO 
+   WARRANTY FOR THE PROGRAM AND ITS COMPONENTS, TO THE EXTENT PERMITTED BY 
+   APPLICABLE LAW. THE SOFTWARE COMPONENT IS "AS IS" WITHOUT WARRANTY OF ANY 
+   KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
+   WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE ENTIRE 
+   RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM AND ITS COMPONENTS 
+   IS WITH YOU. SHOULD THE SOFTWARE COMPONENT PROVE DEFECTIVE, YOU ASSUME THE COST 
+   OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+
+   6. IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING 
+   WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY REDISTRIBUTE THIS 
+   SOFTWARE COMPONENT AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING 
+   ANY GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE 
+   USE OR INABILITY TO USE THIS SOFTWARE COMPONENT (INCLUDING BUT NOT LIMITED TO 
+   LOSS OF DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU 
+   OR THIRD PARTIES OR A FAILURE OF THIS SOFTWARE COMPONENT TO OPERATE WITH ANY 
+   OTHER PROGRAMS), EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF 
+   THE POSSIBILITY OF SUCH DAMAGES.
+
+END OF TERMS AND CONDITIONS
+
+

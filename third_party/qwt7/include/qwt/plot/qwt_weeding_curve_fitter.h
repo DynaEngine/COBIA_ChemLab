@@ -1,0 +1,86 @@
+/******************************************************************************
+ * Qwt Widget Library
+ * Copyright (C) 1997   Josef Wilgen
+ * Copyright (C) 2002   Uwe Rathmann
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the Qwt License, Version 1.0
+ *
+ * Modified by ChenZongYan in 2024 <czy.t@163.com>
+ *   Summary of major modifications (see ChangeLog.md for full history):
+ *   1. CMake build system & C++11 throughout.
+ *   2. Core panner/ zoomer refactored:
+ *        - QwtPanner → QwtCachePanner (pixmap-cache version)
+ *        - New real-time QwtPlotPanner derived from QwtPicker.
+ *   3. Zoomer supports multi-axis.
+ *   4. Parasite-plot framework:
+ *        - QwtFigure, QwtPlotParasiteLayout, QwtPlotTransparentCanvas,
+ *        - QwtPlotScaleEventDispatcher, built-in pan/zoom on axis.
+ *   5. New picker: QwtPlotSeriesDataPicker (works with date axis).
+ *   6. Raster & color-map extensions:
+ *        - QwtGridRasterData (2-D table + interpolation)
+ *        - QwtLinearColorMap::stopColors(), stopPos() API rename.
+ *   7. Bar-chart: expose pen/brush control.
+ *   8. Amalgamated build: single QwtPlot.h / QwtPlot.cpp pair in src-amalgamate.
+ *****************************************************************************/
+
+#ifndef QWT_WEEDING_CURVE_FITTER_H
+#define QWT_WEEDING_CURVE_FITTER_H
+
+#include "qwt_curve_fitter.h"
+
+/*!
+   @brief A curve fitter implementing Douglas and Peucker algorithm
+
+   The purpose of the Douglas and Peucker algorithm is that given a 'curve'
+   composed of line segments to find a curve not too dissimilar but that
+   has fewer points. The algorithm defines 'too dissimilar' based on the
+   maximum distance (tolerance) between the original curve and the
+   smoothed curve.
+
+   The runtime of the algorithm increases non linear ( worst case O( n*n ) )
+   and might be very slow for huge polygons. To avoid performance issues
+   it might be useful to split the polygon ( setChunkSize() ) and to run the algorithm
+   for these smaller parts. The disadvantage of having no interpolation
+   at the borders is for most use cases irrelevant.
+
+   The smoothed curve consists of a subset of the points that defined the
+   original curve.
+
+   In opposite to QwtSplineCurveFitter the Douglas and Peucker algorithm reduces
+   the number of points. By adjusting the tolerance parameter according to the
+   axis scales QwtSplineCurveFitter can be used to implement different
+   level of details to speed up painting of curves of many points.
+ */
+class QWT_EXPORT QwtWeedingCurveFitter : public QwtCurveFitter
+{
+public:
+    // Constructor with tolerance parameter
+    explicit QwtWeedingCurveFitter(double tolerance = 1.0);
+    // Destructor
+    ~QwtWeedingCurveFitter() override;
+
+    // Set the tolerance for curve fitting
+    void setTolerance(double);
+    // Get the current tolerance value
+    double tolerance() const;
+
+    // Set the maximum number of points per chunk
+    void setChunkSize(uint);
+    // Get the current chunk size
+    uint chunkSize() const;
+
+    // Find a curve which has the best fit to a series of data points
+    virtual QPolygonF fitCurve(const QPolygonF&) const override;
+    // Find a curve path which has the best fit to a series of data points
+    virtual QPainterPath fitCurvePath(const QPolygonF&) const override;
+
+private:
+    virtual QPolygonF simplify(const QPolygonF&) const;
+
+    class Line;
+
+    QWT_DECLARE_PRIVATE(QwtWeedingCurveFitter)
+};
+
+#endif

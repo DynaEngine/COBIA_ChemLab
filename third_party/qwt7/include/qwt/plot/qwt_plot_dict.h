@@ -1,0 +1,80 @@
+/******************************************************************************
+ * Qwt Widget Library
+ * Copyright (C) 1997   Josef Wilgen
+ * Copyright (C) 2002   Uwe Rathmann
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the Qwt License, Version 1.0
+ *
+ * Modified by ChenZongYan in 2024 <czy.t@163.com>
+ *   Summary of major modifications (see ChangeLog.md for full history):
+ *   1. CMake build system & C++11 throughout.
+ *   2. Core panner/ zoomer refactored:
+ *        - QwtPanner → QwtCachePanner (pixmap-cache version)
+ *        - New real-time QwtPlotPanner derived from QwtPicker.
+ *   3. Zoomer supports multi-axis.
+ *   4. Parasite-plot framework:
+ *        - QwtFigure, QwtPlotParasiteLayout, QwtPlotTransparentCanvas,
+ *        - QwtPlotScaleEventDispatcher, built-in pan/zoom on axis.
+ *   5. New picker: QwtPlotSeriesDataPicker (works with date axis).
+ *   6. Raster & color-map extensions:
+ *        - QwtGridRasterData (2-D table + interpolation)
+ *        - QwtLinearColorMap::stopColors(), stopPos() API rename.
+ *   7. Bar-chart: expose pen/brush control.
+ *   8. Amalgamated build: single QwtPlot.h / QwtPlot.cpp pair in src-amalgamate.
+ *****************************************************************************/
+
+#ifndef QWT_PLOT_DICT
+#define QWT_PLOT_DICT
+
+#include "qwt_global.h"
+#include "qwt_plot_item.h"
+
+#include <qlist.h>
+
+using QwtPlotItemList     = QList< QwtPlotItem* >;
+using QwtPlotItemIterator = QList< QwtPlotItem* >::ConstIterator;
+
+/**
+ * @brief A dictionary for plot items
+ *
+ * QwtPlotDict organizes plot items in increasing z-order.
+ * If autoDelete() is enabled, all attached items will be deleted
+ * in the destructor of the dictionary.
+ * QwtPlotDict can be used to get access to all QwtPlotItem items - or all
+ * items of a specific type -  that are currently on the plot.
+ *
+ * @sa QwtPlotItem::attach(), QwtPlotItem::detach(), QwtPlotItem::z()
+ */
+class QWT_EXPORT QwtPlotDict
+{
+public:
+    // Constructor
+    explicit QwtPlotDict();
+    // Destructor
+    virtual ~QwtPlotDict();
+
+    // Set the auto-delete mode
+    void setAutoDelete(bool);
+    // Get the auto-delete mode
+    bool autoDelete() const;
+
+    // Get the list of all items
+    const QwtPlotItemList& itemList() const;
+    // Get the list of items with a specific RTTI value
+    QwtPlotItemList itemList(int rtti) const;
+
+    // Detach items from the dictionary
+    void detachItems(int rtti = QwtPlotItem::Rtti_PlotItem, bool autoDelete = true);
+
+protected:
+    /// Insert an item into the dictionary
+    void insertItem(QwtPlotItem*);
+    /// Remove an item from the dictionary
+    void removeItem(QwtPlotItem*);
+
+private:
+    QWT_DECLARE_PRIVATE(QwtPlotDict)
+};
+
+#endif

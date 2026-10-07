@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "qt6-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "D:/program/QT6/Tools/mingw1310_64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "D:/program/QT6/Tools/mingw1310_64/bin/g++.exe",
+        "CMAKE_PREFIX_PATH": "D:/program/QT6/6.9.1/mingw_64",
+        "BUILD_GUI": "ON"
+      }
+    },
+    {
+      "name": "qt6-minsizerel",
+      "displayName": "Qt6 Ninja MinSizeRel",
+      "description": "Qt6 MinGW-w64 with Ninja - Release",
+      "inherits": "qt6-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "qt6-minsizerel",
+      "displayName": "Qt6 MinSizeRel Build",
+      "configurePreset": "qt6-minsizerel"
+    }
+  ]
+}

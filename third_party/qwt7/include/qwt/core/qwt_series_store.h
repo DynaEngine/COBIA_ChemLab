@@ -1,0 +1,200 @@
+/******************************************************************************
+ * Qwt Widget Library
+ * Copyright (C) 1997   Josef Wilgen
+ * Copyright (C) 2002   Uwe Rathmann
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the Qwt License, Version 1.0
+ *
+ * Modified by ChenZongYan in 2024 <czy.t@163.com>
+ *   Summary of major modifications (see ChangeLog.md for full history):
+ *   1. CMake build system & C++11 throughout.
+ *   2. Core panner/ zoomer refactored:
+ *        - QwtPanner → QwtCachePanner (pixmap-cache version)
+ *        - New real-time QwtPlotPanner derived from QwtPicker.
+ *   3. Zoomer supports multi-axis.
+ *   4. Parasite-plot framework:
+ *        - QwtFigure, QwtPlotParasiteLayout, QwtPlotTransparentCanvas,
+ *        - QwtPlotScaleEventDispatcher, built-in pan/zoom on axis.
+ *   5. New picker: QwtPlotSeriesDataPicker (works with date axis).
+ *   6. Raster & color-map extensions:
+ *        - QwtGridRasterData (2-D table + interpolation)
+ *        - QwtLinearColorMap::stopColors(), stopPos() API rename.
+ *   7. Bar-chart: expose pen/brush control.
+ *   8. Amalgamated build: single QwtPlot.h / QwtPlot.cpp pair in src-amalgamate.
+ *****************************************************************************/
+
+#ifndef QWT_SERIES_STORE_H
+#define QWT_SERIES_STORE_H
+
+#include "qwtcore_global.h"
+#include "qwt_series_data.h"
+
+/**
+ * @brief Bridge between QwtSeriesStore and QwtPlotSeriesItem
+ * @details QwtAbstractSeriesStore is an abstract interface only
+ *          to make it possible to isolate the template based methods (QwtSeriesStore)
+ *          from the regular methods (QwtPlotSeriesItem) to make it possible
+ *          to derive from QwtPlotSeriesItem without any hassle with templates.
+ */
+class QwtAbstractSeriesStore
+{
+public:
+    // Destructor
+    virtual ~QwtAbstractSeriesStore()
+    {
+    }
+
+protected:
+#ifndef QWT_PYTHON_WRAPPER
+    /// dataChanged() indicates, that the series has been changed.
+    virtual void dataChanged() = 0;
+
+    /// Set a the "rectangle of interest" for the stored series
+    virtual void setRectOfInterest(const QRectF&) = 0;
+
+    /// @return Bounding rectangle of the stored series
+    virtual QRectF dataRect() const = 0;
+
+    /// @return Number of samples
+    virtual size_t dataSize() const = 0;
+#else
+    // Needed for generating the python bindings, but not for using them !
+    virtual void dataChanged()
+    {
+    }
+    virtual void setRectOfInterest(const QRectF&)
+    {
+    }
+    virtual QRectF dataRect() const
+    {
+        return QRectF(0.0, 0.0, -1.0, -1.0);
+    }
+    virtual size_t dataSize() const
+    {
+        return 0;
+    }
+#endif
+};
+
+/**
+ * @brief Class storing a QwtSeriesData object
+ * @details QwtSeriesStore and QwtPlotSeriesItem are intended as base classes for all
+ *          plot items iterating over a series of samples. Both classes share
+ *          a virtual base class (QwtAbstractSeriesStore) to bridge between them.
+ *
+ *          QwtSeriesStore offers the template based part for the plot item API, so
+ *          that QwtPlotSeriesItem can be derived without any hassle with templates.
+ */
+template< typename T >
+class QwtSeriesStore : public virtual QwtAbstractSeriesStore
+{
+public:
+    // Constructor - The store contains no series
+    explicit QwtSeriesStore();
+
+    // Destructor
+    ~QwtSeriesStore();
+
+    // Assign a series of samples
+    void setData(QwtSeriesData< T >* series);
+
+    // Get the series data
+    QwtSeriesData< T >* data();
+
+    // Get the series data (const version)
+    const QwtSeriesData< T >* data() const;
+
+    // Get sample at position index
+    T sample(size_t index) const;
+
+    // Get number of samples of the series
+    virtual size_t dataSize() const override;
+
+    // Get bounding rectangle of the series or an invalid rectangle, when no series is stored
+    virtual QRectF dataRect() const override;
+
+    // Set a the "rect of interest" for the series
+    virtual void setRectOfInterest(const QRectF& rect) override;
+
+    // Replace a series without deleting the previous one
+    QwtSeriesData< T >* swapData(QwtSeriesData< T >* series);
+
+private:
+    QwtSeriesData< T >* m_series;
+};
+
+template< typename T >
+QwtSeriesStore< T >::QwtSeriesStore() : m_series(nullptr)
+{
+}
+
+template< typename T >
+QwtSeriesStore< T >::~QwtSeriesStore()
+{
+    delete m_series;
+}
+
+template< typename T >
+inline QwtSeriesData< T >* QwtSeriesStore< T >::data()
+{
+    return m_series;
+}
+
+template< typename T >
+inline const QwtSeriesData< T >* QwtSeriesStore< T >::data() const
+{
+    return m_series;
+}
+
+template< typename T >
+inline T QwtSeriesStore< T >::sample(size_t index) const
+{
+    return m_series ? m_series->sample(index) : T();
+}
+
+template< typename T >
+void QwtSeriesStore< T >::setData(QwtSeriesData< T >* series)
+{
+    if (m_series != series) {
+        delete m_series;
+        m_series = series;
+        dataChanged();
+    }
+}
+
+template< typename T >
+size_t QwtSeriesStore< T >::dataSize() const
+{
+    if (m_series == nullptr)
+        return 0;
+
+    return m_series->size();
+}
+
+template< typename T >
+QRectF QwtSeriesStore< T >::dataRect() const
+{
+    if (m_series == nullptr)
+        return QRectF(1.0, 1.0, -2.0, -2.0);  // invalid
+
+    return m_series->boundingRect();
+}
+
+template< typename T >
+void QwtSeriesStore< T >::setRectOfInterest(const QRectF& rect)
+{
+    if (m_series)
+        m_series->setRectOfInterest(rect);
+}
+
+template< typename T >
+QwtSeriesData< T >* QwtSeriesStore< T >::swapData(QwtSeriesData< T >* series)
+{
+    QwtSeriesData< T >* swappedSeries = m_series;
+    m_series                          = series;
+
+    return swappedSeries;
+}
+
+#endif

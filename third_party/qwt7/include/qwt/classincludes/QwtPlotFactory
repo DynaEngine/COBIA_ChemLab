@@ -1,0 +1,1 @@
+#include "../plot/qwt_plot_factory.h"

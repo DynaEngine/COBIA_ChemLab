@@ -1,0 +1,30 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="chemlab_logo.svg">chemlab_logo.svg</file>
+        <file alias="new.svg">new.svg</file>
+        <file alias="open.svg">open.svg</file>
+        <file alias="save.svg">save.svg</file>
+        <file alias="solve.svg">solve.svg</file>
+        <file alias="refresh.svg">refresh.svg</file>
+        <file alias="flask.svg">flask.svg</file>
+        <file alias="mixer.svg">mixer.svg</file>
+        <file alias="heater.svg">heater.svg</file>
+        <file alias="flash.svg">flash.svg</file>
+        <file alias="splitter.svg">splitter.svg</file>
+        <file alias="cooler.svg">cooler.svg</file>
+        <file alias="compressor.svg">compressor.svg</file>
+        <file alias="pump.svg">pump.svg</file>
+        <file alias="valve.svg">valve.svg</file>
+        <file alias="stream.svg">stream.svg</file>
+        <file alias="ppackage.svg">ppackage.svg</file>
+        <file alias="compound.svg">compound.svg</file>
+        <file alias="status_idle.svg">status_idle.svg</file>
+        <file alias="status_run.svg">status_run.svg</file>
+        <file alias="status_done.svg">status_done.svg</file>
+        <file alias="status_error.svg">status_error.svg</file>
+        <file alias="cursor.svg">cursor.svg</file>
+        <file alias="connect.svg">connect.svg</file>
+        <file alias="hand.svg">hand.svg</file>
+        <file alias="config.svg">config.svg</file>
+    </qresource>
+</RCC>

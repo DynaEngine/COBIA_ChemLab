@@ -1,0 +1,153 @@
+/******************************************************************************
+ * Qwt Widget Library
+ * Copyright (C) 1997   Josef Wilgen
+ * Copyright (C) 2002   Uwe Rathmann
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the Qwt License, Version 1.0
+ *
+ * Modified by ChenZongYan in 2024 <czy.t@163.com>
+ *   Summary of major modifications (see ChangeLog.md for full history):
+ *   1. CMake build system & C++11 throughout.
+ *   2. Core panner/ zoomer refactored:
+ *        - QwtPanner → QwtCachePanner (pixmap-cache version)
+ *        - New real-time QwtPlotPanner derived from QwtPicker.
+ *   3. Zoomer supports multi-axis.
+ *   4. Parasite-plot framework:
+ *        - QwtFigure, QwtPlotParasiteLayout, QwtPlotTransparentCanvas,
+ *        - QwtPlotScaleEventDispatcher, built-in pan/zoom on axis.
+ *   5. New picker: QwtPlotSeriesDataPicker (works with date axis).
+ *   6. Raster & color-map extensions:
+ *        - QwtGridRasterData (2-D table + interpolation)
+ *        - QwtLinearColorMap::stopColors(), stopPos() API rename.
+ *   7. Bar-chart: expose pen/brush control.
+ *   8. Amalgamated build: single QwtPlot.h / QwtPlot.cpp pair in src-amalgamate.
+ *****************************************************************************/
+
+#ifndef QWT_RASTER_DATA_H
+#define QWT_RASTER_DATA_H
+
+#include "qwtcore_global.h"
+#include <qnamespace.h>
+
+class QwtInterval;
+class QPolygonF;
+class QRectF;
+class QSize;
+template< typename T >
+class QList;
+template< class Key, class T >
+class QMap;
+
+/**
+ * @brief QwtRasterData defines an interface to any type of raster data.
+ *
+ * QwtRasterData is an abstract interface, that is used by
+ * QwtPlotRasterItem to find the values at the pixels of its raster.
+ *
+ * Gaps inside the bounding rectangle of the data can be indicated by NaN
+ * values ( when WithoutGaps is disabled ).
+ *
+ * Often a raster item is used to display values from a matrix. Then the
+ * derived raster data class needs to implement some sort of resampling,
+ * that maps the raster of the matrix into the requested raster of
+ * the raster item ( depending on resolution and scales of the canvas ).
+ *
+ * QwtMatrixRasterData implements raster data, that returns values from
+ * a given 2D matrix.
+ *
+ * @sa QwtMatrixRasterData
+ *
+ */
+class QWTCORE_EXPORT QwtRasterData
+{
+public:
+    //! Contour lines
+    using ContourLines = QMap< double, QPolygonF >;
+
+    /**
+     * @brief Raster data attributes
+     *
+     * Additional information that is used to improve processing
+     * of the data.
+     *
+     */
+    enum Attribute
+    {
+        /**
+         * The bounding rectangle of the data is spanned by
+         * the interval(Qt::XAxis) and interval(Qt::YAxis).
+         *
+         * WithoutGaps indicates, that the data has no gaps
+         * ( unknown values ) in this area and the result of
+         * value() does not need to be checked for NaN values.
+         *
+         * Enabling this flag will have an positive effect on
+         * the performance of rendering a QwtPlotSpectrogram.
+         *
+         * The default setting is false.
+         *
+         * @note NaN values indicate an undefined value
+         *
+         */
+        WithoutGaps = 0x01
+    };
+
+    Q_DECLARE_FLAGS(Attributes, Attribute)
+
+    /**
+     * @brief Flags to modify the contour algorithm
+     *
+     */
+    enum ConrecFlag
+    {
+        //! Ignore all vertices on the same level
+        IgnoreAllVerticesOnLevel = 0x01,
+
+        //! Ignore all values, that are out of range
+        IgnoreOutOfRange = 0x02
+    };
+
+    Q_DECLARE_FLAGS(ConrecFlags, ConrecFlag)
+
+    /// Constructor
+    QwtRasterData();
+    /// Destructor
+    virtual ~QwtRasterData();
+
+    /// Set an attribute
+    void setAttribute(Attribute, bool on = true);
+    /// Test an attribute
+    bool testAttribute(Attribute) const;
+
+    // Get the bounding interval for an axis
+    virtual QwtInterval interval(Qt::Axis) const = 0;
+
+    /// Return a hint for the raster item, about how to align the pixels
+    virtual QRectF pixelHint(const QRectF&) const;
+
+    /// Initialize the raster
+    virtual void initRaster(const QRectF&, const QSize& raster);
+    /// Discard the raster
+    virtual void discardRaster();
+
+    // Get the value at a raster position
+    virtual double value(double x, double y) const = 0;
+
+    /// Calculate contour lines
+    virtual ContourLines contourLines(const QRectF& rect, const QSize& raster, const QList< double >& levels, ConrecFlags) const;
+
+    class Contour3DPoint;
+    class ContourPlane;
+
+private:
+    QwtRasterData(const QwtRasterData&)            = delete;
+    QwtRasterData& operator=(const QwtRasterData&) = delete;
+
+    QWT_DECLARE_PRIVATE(QwtRasterData)
+};
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(QwtRasterData::ConrecFlags)
+Q_DECLARE_OPERATORS_FOR_FLAGS(QwtRasterData::Attributes)
+
+#endif

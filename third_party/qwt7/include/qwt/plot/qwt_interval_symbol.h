@@ -1,0 +1,116 @@
+/******************************************************************************
+ * Qwt Widget Library
+ * Copyright (C) 1997   Josef Wilgen
+ * Copyright (C) 2002   Uwe Rathmann
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the Qwt License, Version 1.0
+ *
+ * Modified by ChenZongYan in 2024 <czy.t@163.com>
+ *   Summary of major modifications (see ChangeLog.md for full history):
+ *   1. CMake build system & C++11 throughout.
+ *   2. Core panner/ zoomer refactored:
+ *        - QwtPanner → QwtCachePanner (pixmap-cache version)
+ *        - New real-time QwtPlotPanner derived from QwtPicker.
+ *   3. Zoomer supports multi-axis.
+ *   4. Parasite-plot framework:
+ *        - QwtFigure, QwtPlotParasiteLayout, QwtPlotTransparentCanvas,
+ *        - QwtPlotScaleEventDispatcher, built-in pan/zoom on axis.
+ *   5. New picker: QwtPlotSeriesDataPicker (works with date axis).
+ *   6. Raster & color-map extensions:
+ *        - QwtGridRasterData (2-D table + interpolation)
+ *        - QwtLinearColorMap::stopColors(), stopPos() API rename.
+ *   7. Bar-chart: expose pen/brush control.
+ *   8. Amalgamated build: single QwtPlot.h / QwtPlot.cpp pair in src-amalgamate.
+ *****************************************************************************/
+
+#ifndef QWT_INTERVAL_SYMBOL_H
+#define QWT_INTERVAL_SYMBOL_H
+
+#include "qwt_global.h"
+#include <qnamespace.h>
+
+class QPainter;
+class QPen;
+class QBrush;
+class QPointF;
+class QColor;
+
+/**
+ * @brief A drawing primitive for displaying an interval like an error bar
+ * @sa QwtPlotIntervalCurve
+ */
+class QWT_EXPORT QwtIntervalSymbol
+{
+public:
+    //! Symbol style
+    enum Style
+    {
+        //! No Style. The symbol cannot be drawn.
+        NoSymbol = -1,
+
+        /*!
+           The symbol displays a line with caps at the beginning/end.
+           The size of the caps depends on the symbol width().
+         */
+        Bar,
+
+        /*!
+           The symbol displays a plain rectangle using pen() and brush().
+           The size of the rectangle depends on the translated interval and the width().
+         */
+        Box,
+
+        /*!
+           Styles >= UserSymbol are reserved for derived classes of QwtIntervalSymbol
+           that overload draw() with additional application specific symbol types.
+         */
+        UserSymbol = 1000
+    };
+
+public:
+    // Constructor
+    explicit QwtIntervalSymbol(Style = NoSymbol);
+    // Copy constructor
+    QwtIntervalSymbol(const QwtIntervalSymbol&);
+
+    // Destructor
+    virtual ~QwtIntervalSymbol();
+
+    // Assignment operator
+    QwtIntervalSymbol& operator=(const QwtIntervalSymbol&);
+    // Compare two symbols
+    bool operator==(const QwtIntervalSymbol&) const;
+    // Compare two symbols
+    bool operator!=(const QwtIntervalSymbol&) const;
+
+    // Set the symbol width
+    void setWidth(int);
+    // Get the symbol width
+    int width() const;
+
+    // Set the brush for Box style
+    void setBrush(const QBrush&);
+    // Get the brush
+    const QBrush& brush() const;
+
+    // Build and set a pen with color, width and style
+    void setPen(const QColor&, qreal width = 0.0, Qt::PenStyle = Qt::SolidLine);
+    // Set the pen
+    void setPen(const QPen&);
+    // Get the pen
+    const QPen& pen() const;
+
+    // Set the symbol style
+    void setStyle(Style);
+    // Get the symbol style
+    Style style() const;
+
+    // Draw the symbol
+    virtual void draw(QPainter*, Qt::Orientation, const QPointF& from, const QPointF& to) const;
+
+private:
+    QWT_DECLARE_PRIVATE(QwtIntervalSymbol)
+};
+
+#endif

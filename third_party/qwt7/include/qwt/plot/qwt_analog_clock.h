@@ -1,0 +1,119 @@
+/******************************************************************************
+ * Qwt Widget Library
+ * Copyright (C) 1997   Josef Wilgen
+ * Copyright (C) 2002   Uwe Rathmann
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the Qwt License, Version 1.0
+ *
+ * Modified by ChenZongYan in 2024 <czy.t@163.com>
+ *   Summary of major modifications (see ChangeLog.md for full history):
+ *   1. CMake build system & C++11 throughout.
+ *   2. Core panner/ zoomer refactored:
+ *        - QwtPanner → QwtCachePanner (pixmap-cache version)
+ *        - New real-time QwtPlotPanner derived from QwtPicker.
+ *   3. Zoomer supports multi-axis.
+ *   4. Parasite-plot framework:
+ *        - QwtFigure, QwtPlotParasiteLayout, QwtPlotTransparentCanvas,
+ *        - QwtPlotScaleEventDispatcher, built-in pan/zoom on axis.
+ *   5. New picker: QwtPlotSeriesDataPicker (works with date axis).
+ *   6. Raster & color-map extensions:
+ *        - QwtGridRasterData (2-D table + interpolation)
+ *        - QwtLinearColorMap::stopColors(), stopPos() API rename.
+ *   7. Bar-chart: expose pen/brush control.
+ *   8. Amalgamated build: single QwtPlot.h / QwtPlot.cpp pair in src-amalgamate.
+ *****************************************************************************/
+
+#ifndef QWT_ANALOG_CLOCK_H
+#define QWT_ANALOG_CLOCK_H
+
+#include "qwt_global.h"
+#include "qwt_dial.h"
+
+class QwtDialNeedle;
+
+/**
+ *   @brief An analog clock widget
+ *   @details QwtAnalogClock is a widget that displays an analog clock with hour, minute,
+ *            and second hands.
+ *   @image html analogclock.png
+ *   @par Example
+ *   @code
+ *   #include <qwt_analog_clock.h>
+ *   QwtAnalogClock *clock = new QwtAnalogClock(...);
+ *   clock->scaleDraw()->setPenWidth(3);
+ *   clock->setLineWidth(6);
+ *   clock->setFrameShadow(QwtDial::Sunken);
+ *   clock->setTime();
+ *   // update the clock every second
+ *   QTimer *timer = new QTimer(clock);
+ *   timer->connect(timer, SIGNAL(timeout()), clock, SLOT(setCurrentTime()));
+ *   timer->start(1000);
+ *   @endcode
+ *   @note The examples/dials example shows how to use QwtAnalogClock.
+ */
+
+class QWT_EXPORT QwtAnalogClock : public QwtDial
+{
+    Q_OBJECT
+
+public:
+    /**
+     *   @brief Hand type enumeration
+     *   @details Defines the types of clock hands available.
+     *   @sa setHand(), hand()
+     */
+    enum Hand
+    {
+        //! Needle displaying the seconds
+        SecondHand,
+
+        //! Needle displaying the minutes
+        MinuteHand,
+
+        //! Needle displaying the hours
+        HourHand,
+
+        //! Number of needles
+        NHands
+    };
+
+    // Constructs an analog clock widget
+    explicit QwtAnalogClock(QWidget* parent = nullptr);
+    // Destructor
+    ~QwtAnalogClock() override;
+
+    // Sets a specific clock hand needle
+    void setHand(Hand, QwtDialNeedle*);
+
+    // Returns a specific clock hand needle (const version)
+    const QwtDialNeedle* hand(Hand) const;
+    // Returns a specific clock hand needle
+    QwtDialNeedle* hand(Hand);
+
+public Q_SLOTS:
+    /**
+     *   @brief Set the clock to display the current time
+     *   @details Updates the clock display to show the current system time.
+     */
+    void setCurrentTime();
+
+    /**
+     *   @brief Set the clock to display a specific time
+     *   @param[in] time Time to display
+     */
+    void setTime(const QTime&);
+
+protected:
+    virtual void drawNeedle(QPainter*, const QPointF&, double radius, double direction, QPalette::ColorGroup) const override;
+
+    virtual void drawHand(QPainter*, Hand, const QPointF&, double radius, double direction, QPalette::ColorGroup) const;
+
+private:
+    // use setHand instead
+    void setNeedle(QwtDialNeedle*);
+
+    QwtDialNeedle* m_hand[ NHands ];
+};
+
+#endif
