@@ -1,90 +1,93 @@
-# COBIA 物性包开发指南
+# COBIA Property Package Development Guide
 
-> 以本项目的 `WaterPP`（IAPWS-97 纯水物性包）和 `IdealGasPP`（多组分理想气体物性包）为双参考示例。读完本文后，你应能独立编写、调试并注册一个可被 COFE 加载的 COBIA 物性包——无论它是单组分还是多组分。
+> Using the project's `WaterPP` (IAPWS-97 pure water property package) and `IdealGasPP` (multi-component ideal gas property package) as dual reference examples. After reading this guide, you should be able to independently write, debug, and register a COBIA Property Package that can be loaded by COFE — whether it's single-component or multi-component.
 
 ---
 
-## 一、背景：什么是 COBIA
+## 1. Background: What is COBIA
 
-### 1.1 CAPE-OPEN 简介
+### 1.1 CAPE-OPEN Overview
 
-**CAPE-OPEN**（Computer-Aided Process Engineering Open Interface）是一套流程模拟软件的互操作标准。它定义了一系列 COM 接口，让不同厂商的物性包（Property Package）、单元操作（Unit Operation）和求解器可以在同一个流程模拟环境（PME，如 COFE、Aspen Plus）中协同工作。
+**CAPE-OPEN** (Computer-Aided Process Engineering Open Interface) is a set of interoperability standards for process simulation software. It defines a series of COM interfaces that allow Property Packages, Unit Operations, and Solvers from different vendors to work together within the same Process Modeling Environment (PME, such as COFE, Aspen Plus).
 
-核心角色：
+Core roles:
 
 ```
 ┌──────────────┐     ┌─────────────────────┐     ┌──────────────────┐
 │   PME (COFE) │────▶│ PropertyPackage (PP) │────▶│ Material Object  │
-│ 流程模拟环境  │     │ 物性包 (本指南主角)    │     │ 物料对象          │
-└──────────────┘     └─────────────────────┘     └──────────────────┘
-       │                        │
-       ▼                        ▼
-┌──────────────┐     ┌─────────────────────┐
-│  Unit Op     │     │ 物性引擎 (IAPWS-97)  │
-│ 单元操作     │     │ 纯数学计算，无接口依赖  │
-└──────────────┘     └─────────────────────┘
+│   Process     │     │ Property Package      │     │                  │
+│   Modeling    │     │ (hero of this guide)  │     │                  │
+│   Environment │     └─────────────────────┘     └──────────────────┘
+└──────────────┘                │
+       │                        ▼
+       ▼              ┌─────────────────────┐
+┌──────────────┐      │ Property Engine      │
+│  Unit Op     │      │ (IAPWS-97)           │
+│              │      │ Pure math, no         │
+│              │      │ interface dependency  │
+└──────────────┘      └─────────────────────┘
 ```
 
-PME 通过 CAPE-OPEN 标准接口向 PP 查询物性，PP 通过 Material 对象读取 T/P/组成，返回计算结果。
+The PME queries the PP for properties through CAPE-OPEN standard interfaces. The PP reads T/P/composition through Material objects and returns calculation results.
 
-### 1.2 COBIA vs 传统 COM
+### 1.2 COBIA vs Traditional COM
 
-| 维度 | 传统 COM（如原始 Water 包） | COBIA SDK（WaterPP / IdealGasPP） |
-|------|--------------------------|---------------------|
-| **编译工具链** | Visual C++ / MSVC only | MinGW-w64 / CMake（跨平台） |
-| **COM 实现** | ATL + IDispatch + VARIANT（手写） | `CapeInterfaceAdapters`（模板自动生成） |
-| **注册机制** | `regsvr32 / DllRegisterServer` | `cobiaRegister.exe -a` |
-| **字符串** | `BSTR` / `CBStr` | `CapeStringImpl` / `ICapeString` |
-| **错误处理** | `HRESULT` + `BEGIN_TRY`/`END_TRY` 宏 | C++ 异常 `throw cape_open_error()` |
-| **代码量** | ~8000 行（含大量 COM 样板） | WaterPP ~1200 行 / IdealGasPP ~750 行 |
+| Dimension | Traditional COM (e.g., original Water package) | COBIA SDK (WaterPP / IdealGasPP) |
+|-----------|-----------------------------------------------|----------------------------------|
+| **Build toolchain** | Visual C++ / MSVC only | MinGW-w64 / CMake (cross-platform) |
+| **COM implementation** | ATL + IDispatch + VARIANT (hand-written) | `CapeInterfaceAdapters` (template auto-generated) |
+| **Registration** | `regsvr32 / DllRegisterServer` | `cobiaRegister.exe -a` |
+| **Strings** | `BSTR` / `CBStr` | `CapeStringImpl` / `ICapeString` |
+| **Error handling** | `HRESULT` + `BEGIN_TRY`/`END_TRY` macros | C++ exceptions `throw cape_open_error()` |
+| **Code volume** | ~8,000 lines (lots of COM boilerplate) | WaterPP ~1,200 lines / IdealGasPP ~750 lines |
 
-> COBIA 的核心价值：**自动生成 COM 样板代码**。你只需关注物性计算逻辑，不用手写 `IDispatch::Invoke`、`VARIANT` 转换、`DllRegisterServer` 等。
+> The core value of COBIA: **auto-generates COM boilerplate code**. You only need to focus on property calculation logic — no hand-writing `IDispatch::Invoke`, `VARIANT` conversions, `DllRegisterServer`, etc.
 
-### 1.3 单组分 vs 多组分
+### 1.3 Single-Component vs Multi-Component
 
-本指南覆盖两种最常见的物性包类型：
+This guide covers the two most common property package types:
 
-| 维度 | 单组分（WaterPP） | 多组分（IdealGasPP） |
-|------|------------------|---------------------|
-| **化合物数** | 1（Water） | N（N₂, O₂, CO₂...） |
-| **相数** | 2（Vapor + Liquid） | 1（Vapor only） |
-| **物性引擎** | IAPWS-97 方程组 | Cp 多项式 + 理想气体定律 |
-| **组分管理** | 无需 | `std::vector<CompoundData>` |
-| **闪蒸复杂度** | 需算相平衡（Psat/Tsat） | 仅气相，无相变 |
-| **校验关键** | phaseFraction 范围 | 组分 fraction sum≈1 |
+| Dimension | Single-Component (WaterPP) | Multi-Component (IdealGasPP) |
+|-----------|---------------------------|------------------------------|
+| **Compound count** | 1 (Water) | N (N₂, O₂, CO₂...) |
+| **Phase count** | 2 (Vapor + Liquid) | 1 (Vapor only) |
+| **Property engine** | IAPWS-97 equations | Cp polynomial + ideal gas law |
+| **Compound management** | Not needed | `std::vector<CompoundData>` |
+| **Flash complexity** | Must compute phase equilibrium (Psat/Tsat) | Vapor only, no phase change |
+| **Validation focus** | phaseFraction range | Compound fraction sum≈1 |
 
-### 1.4 8 个必需的 Adapter
+### 1.4 The 8 Required Adapters
 
-一个 COBIA 物性包必须继承以下 8 个 Adapter（CRTP 模式）：
+A COBIA property package must inherit from the following 8 Adapters (CRTP pattern):
 
-| # | Adapter | 对应 CAPE-OPEN 接口 | 作用 |
-|---|---------|-------------------|------|
-| 1 | `CapeThermoPropertyPackageManagerAdapter` | ICapeThermoPropertyPackageManager | PME 通过它获取 PP 实例 |
-| 2 | `CapeThermoMaterialContextAdapter` | ICapeThermoMaterialContext | 接收/释放 Material 对象 |
-| 3 | `CapeThermoCompoundsAdapter` | ICapeThermoCompounds | 化合物列表、常数、T/P 依赖属性 |
-| 4 | `CapeThermoPhasesAdapter` | ICapeThermoPhases | 相定义（Vapor/Liquid） |
-| 5 | `CapeThermoPropertyRoutineAdapter` | ICapeThermoPropertyRoutine | 单相/两相物性计算 |
-| 6 | `CapeThermoEquilibriumRoutineAdapter` | ICapeThermoEquilibriumRoutine | 相平衡/闪蒸计算 |
-| 7 | `CapeThermoUniversalConstantAdapter` | ICapeThermoUniversalConstant | 通用常数（R, Avogadro...） |
+| # | Adapter | Corresponding CAPE-OPEN Interface | Purpose |
+|---|---------|----------------------------------|---------|
+| 1 | `CapeThermoPropertyPackageManagerAdapter` | ICapeThermoPropertyPackageManager | PME obtains PP instances through this |
+| 2 | `CapeThermoMaterialContextAdapter` | ICapeThermoMaterialContext | Receives/releases Material objects |
+| 3 | `CapeThermoCompoundsAdapter` | ICapeThermoCompounds | Compound list, constants, T/P-dependent properties |
+| 4 | `CapeThermoPhasesAdapter` | ICapeThermoPhases | Phase definitions (Vapor/Liquid) |
+| 5 | `CapeThermoPropertyRoutineAdapter` | ICapeThermoPropertyRoutine | Single-phase/two-phase property calculation |
+| 6 | `CapeThermoEquilibriumRoutineAdapter` | ICapeThermoEquilibriumRoutine | Phase equilibrium/flash calculation |
+| 7 | `CapeThermoUniversalConstantAdapter` | ICapeThermoUniversalConstant | Universal constants (R, Avogadro...) |
 | 8 | `CapeUtilitiesAdapter` | ICapeUtilities | Initialize/Terminate/Edit |
 
-缺少任何一个都会导致编译失败。COBIA SDK 自带的 `CapeWizard.exe` 可以生成包含全部 8 个 Adapter 的模板代码。
+Missing any one of these will cause a compilation failure. The COBIA SDK's built-in `CapeWizard.exe` can generate template code containing all 8 Adapters.
 
 ---
 
-## 二、从零创建 COBIA 物性包
+## 2. Creating a COBIA Property Package from Scratch
 
-### 2.1 环境准备
+### 2.1 Environment Setup
 
-| 组件 | 用途 | 路径/来源 |
-|------|------|----------|
-| **COBIA SDK** | 头文件 + 注册工具 | `C:\Program Files (x86)\Common Files\CAPE-OPEN Laboratories Network\Include\` |
-| **cobiaRegister.exe** | DLL 注册/反注册 | `C:\Program Files\Common Files\CAPE-OPEN Laboratories Network\COBIA\` |
-| **MSYS2 MinGW-w64** | GCC 编译器 | `D:\msys64\mingw64\bin\` |
-| **CMake** | 构建系统 | 3.16+ |
-| **COFE** | 测试用 PME | https://www.amsterchem.com/cofe.html |
+| Component | Purpose | Path/Source |
+|-----------|---------|-------------|
+| **COBIA SDK** | Headers + registration tool | `C:\Program Files (x86)\Common Files\CAPE-OPEN Laboratories Network\Include\` |
+| **cobiaRegister.exe** | DLL registration/unregistration | `C:\Program Files\Common Files\CAPE-OPEN Laboratories Network\COBIA\` |
+| **MSYS2 MinGW-w64** | GCC compiler | `D:\msys64\mingw64\bin\` |
+| **CMake** | Build system | 3.16+ |
+| **COFE** | PME for testing | https://www.amsterchem.com/cofe.html |
 
-验证环境：
+Verify environment:
 
 ```powershell
 Test-Path "C:\Program Files (x86)\Common Files\CAPE-OPEN Laboratories Network\Include\COBIA.h"
@@ -92,19 +95,19 @@ Test-Path "C:\Program Files (x86)\Common Files\CAPE-OPEN Laboratories Network\In
 Test-Path "C:\Program Files\Common Files\CAPE-OPEN Laboratories Network\COBIA\cobiaRegister.exe"
 ```
 
-### 2.2 项目文件结构
+### 2.2 Project File Structure
 
 ```
 MyPP/
-├── CMakeLists.txt        # 构建配置
-├── MyPP.h                # 类声明 + 8 个 Adapter 继承
-├── MyPP.cpp              # 所有接口实现
-└── Engine.h/cpp          # 物性引擎（纯数学，无 COBIA 依赖）
+├── CMakeLists.txt        # Build configuration
+├── MyPP.h                # Class declaration + 8 Adapter inheritance
+├── MyPP.cpp              # All interface implementations
+└── Engine.h/cpp          # Property engine (pure math, no COBIA dependency)
 ```
 
-**设计原则**：物性引擎（Engine）与 CAPE-OPEN 接口**完全解耦**。Engine 只负责数学计算，不依赖任何 COM/COBIA 头文件。这让你可以单独编译 Engine 为命令行工具进行单元测试。
+**Design principle**: The property engine is **completely decoupled** from CAPE-OPEN interfaces. The Engine only handles mathematical calculations and depends on no COM/COBIA headers. This allows you to compile the Engine separately as a command-line tool for unit testing.
 
-### 2.3 Step 1：CMakeLists.txt
+### 2.3 Step 1: CMakeLists.txt
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -119,7 +122,7 @@ add_library(MyPP SHARED MyPP.cpp Engine.cpp)
 target_include_directories(MyPP PRIVATE ${COBIA_INC} .)
 target_compile_definitions(MyPP PRIVATE COBIA_NOAUTOLINK)
 
-# MinGW 静态链接
+# MinGW static linking
 if(MINGW)
     target_link_options(MyPP PRIVATE
         -static-libgcc -static-libstdc++
@@ -130,7 +133,7 @@ target_link_libraries(MyPP PRIVATE advapi32 shell32 user32 ole32 oleaut32 uuid)
 set_target_properties(MyPP PROPERTIES PREFIX "" SUFFIX ".dll")
 ```
 
-### 2.4 Step 2：头文件（MyPP.h）— 最小模板
+### 2.4 Step 2: Header File (MyPP.h) — Minimal Template
 
 ```cpp
 #pragma once
@@ -239,15 +242,15 @@ private:
 } // namespace MyNS
 ```
 
-> ⚠️ GUID 必须全局唯一。开发阶段可用固定值，**发布前必须生成新的**。重复 GUID 会导致 COBIA 注册冲突。
+> ⚠️ The GUID must be globally unique. You can use a fixed value during development, but **must generate a new one before release**. Duplicate GUIDs will cause COBIA registration conflicts.
 
-### 2.5 Step 3：最小实现（MyPP.cpp）— 单相理想气体
+### 2.5 Step 3: Minimal Implementation (MyPP.cpp) — Single-Phase Ideal Gas
 
-下面是一个**只支持单相理想气体**的最小实现。它在 COFE 中加载后可以计算 density 和 enthalpy：
+Below is a minimal implementation supporting only **single-phase ideal gas**. Once loaded in COFE, it can compute density and enthalpy:
 
 ```cpp
 #include "MyPP.h"
-#include "Engine.h"   // 你的物性引擎
+#include "Engine.h"   // Your property engine
 #include <cmath>
 
 namespace MyNS {
@@ -323,7 +326,7 @@ void MyPP::GetTDependentProperty(COBIA::CapeArrayString, COBIA::CapeReal,
     missing = true;
 }
 void MyPP::getPDependentPropList(COBIA::CapeArrayString props) {
-    props.setsize(0);  // 必须显式设空
+    props.setsize(0);  // must explicitly set empty
 }
 void MyPP::GetPDependentProperty(COBIA::CapeArrayString, COBIA::CapeReal,
     COBIA::CapeArrayString, COBIA::CapeBoolean& missing, COBIA::CapeArrayReal)
@@ -365,7 +368,7 @@ void MyPP::GetPhaseInfo(COBIA::CapeString label, COBIA::CapeString attr,
     }
 }
 
-// ========== 5. PropertyRoutine — 核心物性计算 ==========
+// ========== 5. PropertyRoutine — Core property calculation ==========
 void MyPP::CalcAndGetLnPhi(COBIA::CapeString, COBIA::CapeReal,
     COBIA::CapeReal, COBIA::CapeArrayReal, COBIA::CapeInteger,
     COBIA::CapeArrayReal, COBIA::CapeArrayReal, COBIA::CapeArrayReal,
@@ -388,7 +391,7 @@ void MyPP::CalcSinglePhaseProp(COBIA::CapeArrayString props,
 {
     if (!hasMaterial) return;
 
-    // 1. 从相中读取 T/P
+    // 1. Read T/P from phase
     COBIA::CapeStringImpl tempStr(COBIATEXT("temperature"));
     COBIA::CapeStringImpl presStr(COBIATEXT("pressure"));
     COBIA::CapeArrayRealImpl t(1);
@@ -396,7 +399,7 @@ void MyPP::CalcSinglePhaseProp(COBIA::CapeArrayString props,
 
     material.GetSinglePhaseProp(
         static_cast<ICapeString*>(&tempStr), phaseLabel,
-        static_cast<ICapeString*>(nullptr),  // T/P 的 basis 必须是 nullptr
+        static_cast<ICapeString*>(nullptr),  // T/P basis must be nullptr
         static_cast<ICapeArrayReal*>(&t));
     material.GetSinglePhaseProp(
         static_cast<ICapeString*>(&presStr), phaseLabel,
@@ -405,17 +408,17 @@ void MyPP::CalcSinglePhaseProp(COBIA::CapeArrayString props,
 
     double T = t[0], P = p[0];
 
-    // 2. 校验
+    // 2. Validate
     if (!std::isfinite(T) || T <= 0.0)
         throw COBIA::cape_open_error(COBIAERR_InvalidOperation);
     if (!std::isfinite(P) || P <= 0.0)
         throw COBIA::cape_open_error(COBIAERR_InvalidOperation);
 
-    // 3. 调用物性引擎
+    // 3. Call property engine
     double density = P * 28.0e-3 / (8.314462618 * T);  // PM/RT
     double enthalpy = 1.005 * 28.0 * T;                 // Cp*M*T (J/mol)
 
-    // 4. 写回 Material
+    // 4. Write back to Material
     COBIA::CapeStringImpl propStr;
     COBIA::CapeStringImpl basisMole(COBIATEXT("mole"));
     COBIA::CapeArrayRealImpl val(1);
@@ -483,65 +486,65 @@ static void Register(COBIA::CapePMCRegistrar registrar) {
 } // namespace MyNS
 ```
 
-### 2.6 Step 4：编译、注册、测试
+### 2.6 Step 4: Build, Register, Test
 
 ```powershell
-# 编译
+# Build
 $env:PATH = "D:\msys64\mingw64\bin;" + $env:PATH
 cd build/mingw-release
 cmake --build . --target MyPP
 
-# 注册
+# Register
 & "C:\Program Files\Common Files\CAPE-OPEN Laboratories Network\COBIA\cobiaRegister.exe" ^
     -a "build/mingw-release/MyPP.dll"
 
-# 反注册（更新 DLL 前必须先执行）
+# Unregister (must be done before updating the DLL)
 & "C:\Program Files\Common Files\CAPE-OPEN Laboratories Network\COBIA\cobiaRegister.exe" ^
     -u "build/mingw-release/MyPP.dll"
 ```
 
-测试流程：**完全关闭 COFE → 编译 → 注册 → 打开 COFE → Configure → Property Packages → 添加 MyPP**
+Test workflow: **Completely close COFE → Build → Register → Open COFE → Configure → Property Packages → Add MyPP**
 
-> ⚠️ **COM 缓存是新手最常见陷阱**：修改 DLL 后必须完全关闭 COFE 再重新打开，否则进程中的 COM 缓存仍会加载旧 DLL。
+> ⚠️ **COM caching is the most common rookie trap**: After modifying the DLL, you must completely close COFE and reopen it, otherwise the in-process COM cache will still load the old DLL.
 
-### 2.7 最小例子检查清单
+### 2.7 Minimal Example Checklist
 
-填写下面清单确认你的实现是否完整：
+Fill out the checklist below to confirm your implementation is complete:
 
-| # | 检查项 | ✓ |
-|---|--------|---|
-| 1 | 8 个 Adapter 全部声明 | ☐ |
-| 2 | `getPropertyPackageList` 返回包名 | ☐ |
-| 3 | `GetPropertyPackage` 创建并返回 PP 实例 | ☐ |
-| 4 | `getNumCompounds` 返回 ≥1 | ☐ |
-| 5 | `GetCompoundList` 填写至少一个化合物 | ☐ |
-| 6 | `getConstPropList` 至少返回 `molecularWeight` | ☐ |
-| 7 | `GetCompoundConstant` 处理 `molecularWeight` | ☐ |
-| 8 | `getPDependentPropList` 显式 `setsize(0)` | ☐ |
-| 9 | `getNumPhases` 返回 ≥1 | ☐ |
-| 10 | `GetPhaseList` 填写至少一个相 | ☐ |
-| 11 | `getSinglePhasePropList` 至少返回 `"enthalpy"` | ☐ |
-| 12 | `CalcSinglePhaseProp` 能用 `nullptr` 读 T/P 并写出结果 | ☐ |
-| 13 | `CheckEquilibriumSpec` 返回 `true` | ☐ |
-| 14 | `Register` 填写包名 + `addCatID` | ☐ |
-| 15 | COFE 中能加载、能看到化合物和属性 | ☐ |
+| # | Check Item | ✓ |
+|---|------------|---|
+| 1 | All 8 Adapters declared | ☐ |
+| 2 | `getPropertyPackageList` returns package name | ☐ |
+| 3 | `GetPropertyPackage` creates and returns PP instance | ☐ |
+| 4 | `getNumCompounds` returns ≥1 | ☐ |
+| 5 | `GetCompoundList` fills at least one compound | ☐ |
+| 6 | `getConstPropList` returns at least `molecularWeight` | ☐ |
+| 7 | `GetCompoundConstant` handles `molecularWeight` | ☐ |
+| 8 | `getPDependentPropList` explicitly `setsize(0)` | ☐ |
+| 9 | `getNumPhases` returns ≥1 | ☐ |
+| 10 | `GetPhaseList` fills at least one phase | ☐ |
+| 11 | `getSinglePhasePropList` returns at least `"enthalpy"` | ☐ |
+| 12 | `CalcSinglePhaseProp` can read T/P with `nullptr` and write results | ☐ |
+| 13 | `CheckEquilibriumSpec` returns `true` | ☐ |
+| 14 | `Register` fills package name + `addCatID` | ☐ |
+| 15 | Can load in COFE, can see compounds and properties | ☐ |
 
-以上 15 项全部通过，你的 COBIA 物性包就站稳了脚跟。接下来可以逐步添加更多功能。
+Once all 15 items pass, your COBIA property package has a solid foundation. You can then gradually add more features.
 
 ---
 
-## 三、接口方法详解（以 WaterPP / IdealGasPP 为双参考）
+## 3. Interface Method Details (Dual Reference: WaterPP / IdealGasPP)
 
-每节按 "最短可用代码 → WaterPP 完整实现 → 常见错误" 三层递进。
+Each section follows a three-tier progression: "shortest usable code → WaterPP full implementation → common mistakes".
 
-### 3.1 化合物数据库（ICapeThermoCompounds）
+### 3.1 Compound Database (ICapeThermoCompounds)
 
-**最小要求**：至少注册一种化合物，提供 `molecularWeight`。
+**Minimum requirement**: Register at least one compound, provide `molecularWeight`.
 
-**WaterPP 实现**：一种化合物 Water，12 个常数，10 个 T 依赖属性。
+**WaterPP implementation**: One compound Water, 12 constants, 10 T-dependent properties.
 
 ```cpp
-// getConstPropList — 声明常数列表
+// getConstPropList — declare constant list
 void WaterPP::getConstPropList(COBIA::CapeArrayString props) {
     const CapeCharacter* list[] = {
         COBIATEXT("molecularWeight"),
@@ -561,7 +564,7 @@ void WaterPP::getConstPropList(COBIA::CapeArrayString props) {
     for (int i = 0; i < 12; ++i) props[i] = list[i];
 }
 
-// GetCompoundConstant — 逐属性返回
+// GetCompoundConstant — return per property
 void WaterPP::GetCompoundConstant(...) {
     for (size_t i = 0; i < props.size(); i++) {
         std::wstring pn = static_cast<std::wstring>(props[i]);
@@ -572,7 +575,7 @@ void WaterPP::GetCompoundConstant(...) {
         else if (pn == L"criticalPressure")
             vals[i].Set(CapeDouble(Water::PCRIT * 1e6));  // 22.064e6 Pa
         else {
-            auto it = constValues.find(pn);               // map 查找
+            auto it = constValues.find(pn);               // map lookup
             if (it != constValues.end())
                 vals[i].Set(CapeDouble(it->second));
             else missing = true;
@@ -581,52 +584,52 @@ void WaterPP::GetCompoundConstant(...) {
 }
 ```
 
-> 💡 使用 `std::map<std::wstring, double>` 存储次要常量，避免冗长的 if-else 链。
+> 💡 Use `std::map<std::wstring, double>` to store secondary constants, avoiding long if-else chains.
 
-**T 依赖属性列表**（`getTDependentPropList`）：
+**T-dependent property list** (`getTDependentPropList`):
 
-| 属性 ID | 说明 |
-|---------|------|
-| `vaporPressure` | 饱和蒸气压 Pa |
-| `surfaceTensionSatLiquid` | 表面张力 N/m |
-| `thermalConductivityLiquid` / `Vapor` | 饱和线导热系数 W/(m·K) |
-| `viscosityLiquid` / `Vapor` | 饱和线粘度 Pa·s |
-| `volumeLiquid` / `volumeChangeVaporization` | 饱和线比容 / 蒸发比容差 m³/mol |
-| `idealGasEnthalpy` / `idealGasEntropy` | 理想气体焓/熵 J/mol |
+| Property ID | Description |
+|-------------|-------------|
+| `vaporPressure` | Saturation vapor pressure Pa |
+| `surfaceTensionSatLiquid` | Surface tension N/m |
+| `thermalConductivityLiquid` / `Vapor` | Saturation line thermal conductivity W/(m·K) |
+| `viscosityLiquid` / `Vapor` | Saturation line viscosity Pa·s |
+| `volumeLiquid` / `volumeChangeVaporization` | Saturation line specific volume / vaporization volume difference m³/mol |
+| `idealGasEnthalpy` / `idealGasEntropy` | Ideal gas enthalpy/entropy J/mol |
 
-### 3.2 单相属性计算（CalcSinglePhaseProp）⭐ 最常用
+### 3.2 Single-Phase Property Calculation (CalcSinglePhaseProp) ⭐ Most Common
 
-PME 在每次迭代中调用此方法计算密度、焓、熵等单相物性。
+The PME calls this method in every iteration to compute density, enthalpy, entropy, and other single-phase properties.
 
-**标准流程**（5 步）：
+**Standard workflow** (5 steps):
 
 ```
 1. GetSinglePhaseProp("temperature", phaseLabel, nullptr) → T
 2. GetSinglePhaseProp("pressure",    phaseLabel, nullptr) → P
-3. isfinite(T) && T>0,  isfinite(P) && P>0 验证 → 失败即抛
-4. Engine.compute(T, P) → 物性值
+3. isfinite(T) && T>0,  isfinite(P) && P>0 validate → throw on failure
+4. Engine.compute(T, P) → property values
 5. SetSinglePhaseProp(propName, phaseLabel, basis, value)
 ```
 
-**单位转换 — WaterPP 的教训**：
+**Unit conversion — WaterPP lessons**:
 
-Water 引擎内部单位是 **kJ/kg**，COBIA 要求 **mole basis (J/mol)**。
+The Water engine's internal unit is **kJ/kg**, while COBIA requires **mole basis (J/mol)**.
 
 ```
 w.enthalpy()  = kJ/kg
 
 J/mol = kJ/kg × 1000(J/kJ) × (MOLWT_g/1000)(kg/mol)
-      = kJ/kg × MOLWT                    ← ×1000 和 ÷1000 抵消！
+      = kJ/kg × MOLWT                    ← ×1000 and ÷1000 cancel!
 ```
 
-因此正确转换是 `w.enthalpy() * Water::MOLWT`（**不需要** `* 1e3`）。
+Therefore the correct conversion is `w.enthalpy() * Water::MOLWT` (**does not need** `* 1e3`).
 
-> ⚠️ WaterPP 之前曾错误地写为 `w.enthalpy() * MOLWT * 1e3`，导致所有 thermo 属性放大 1000 倍。
+> ⚠️ WaterPP previously had the bug `w.enthalpy() * MOLWT * 1e3`, causing all thermo properties to be inflated 1000×.
 
-**Basis 参数速查表**：
+**Basis parameter quick reference**:
 
-| 属性类型 | basis 参数 | 示例 |
-|---------|:---------:|------|
+| Property type | basis parameter | Example |
+|---------------|:---------------:|---------|
 | temperature | `nullptr` | `GetSinglePhaseProp("temperature", phase, nullptr, &t)` |
 | pressure | `nullptr` | `GetSinglePhaseProp("pressure", phase, nullptr, &p)` |
 | enthalpy/entropy/Cp/Cv... | `"mole"` | `SetSinglePhaseProp("enthalpy", phase, "mole", &v)` |
@@ -634,13 +637,13 @@ J/mol = kJ/kg × 1000(J/kJ) × (MOLWT_g/1000)(kg/mol)
 | viscosity | `nullptr` | `SetSinglePhaseProp("viscosity", phase, nullptr, &v)` |
 | fraction | `"mole"` | `GetSinglePhaseProp("fraction", phase, "mole", &v)` |
 
-> ❌ **不要**传空字符串 `""` 作为 basis — 这会导致 "Invalid base specified"。
-> ✅ **务必**对 T/P 传 `nullptr` — 这是 CAPE-OPEN 标准规定的无量纲属性。
+> ❌ **Do not** pass empty string `""` as basis — this causes "Invalid base specified".
+> ✅ **Always** pass `nullptr` for T/P — this is the CAPE-OPEN standard for dimensionless properties.
 
-**WaterPP 支持的 11 个单相属性**：
+**WaterPP's 11 supported single-phase properties**:
 
-| 属性 | Water 引擎输入 | COBIA 输出 | 转换公式 |
-|------|:---:|------|------|
+| Property | Water engine input | COBIA output | Conversion formula |
+|----------|:------------------:|--------------|--------------------|
 | density | m³/kg | mol/m³ | `1 / (v × M × 1e-3)` |
 | enthalpy | kJ/kg | J/mol | `h × M` |
 | entropy | kJ/(kg·K) | J/(mol·K) | `s × M` |
@@ -648,15 +651,15 @@ J/mol = kJ/kg × 1000(J/kJ) × (MOLWT_g/1000)(kg/mol)
 | heatCapacityCp | kJ/(kg·K) | J/(mol·K) | `cp × M` |
 | heatCapacityCv | kJ/(kg·K) | J/(mol·K) | `cv × M` |
 | internalEnergy | kJ/kg | J/mol | `u × M` |
-| molecularWeight | — | g/mol | 直接 `Water::MOLWT` |
-| thermalConductivity | W/(m·K) | W/(m·K) | 直接使用 |
+| molecularWeight | — | g/mol | direct `Water::MOLWT` |
+| thermalConductivity | W/(m·K) | W/(m·K) | direct use |
 | volume | m³/kg | m³/mol | `v × M × 1e-3` |
-| viscosity | Pa·s | Pa·s | 直接使用 |
+| viscosity | Pa·s | Pa·s | direct use |
 
-**多组分扩展**（IdealGasPP）：逐组分计算混合性质：
+**Multi-component extension** (IdealGasPP): compute mixture properties per component:
 
 ```cpp
-// 读取组分 fractions
+// Read component fractions
 material.GetSinglePhaseProp(&fracStr, phaseLabel, &basisMole, &fractions);
 
 double mixH = 0.0, mixCp = 0.0, mixDensity = 0.0;
@@ -673,44 +676,44 @@ for (size_t ci = 0; ci < compoundDB.size(); ++ci) {
 mixDensity = P / (8.314462618 * T) * molarMassMix;  // PM/RT
 ```
 
-> 💡 理想气体混合性质 = Σ xᵢ × 纯组分性质，density 不过分子量混合。
+> 💡 Ideal gas mixture property = Σ xᵢ × pure component property. Density goes through molar mass mixing, not summation.
 
-### 3.3 相平衡/闪蒸（CalcEquilibrium）— 最复杂
+### 3.3 Phase Equilibrium / Flash (CalcEquilibrium) — Most Complex
 
-COBIA `CapeThermoEquilibriumRoutineAdapter` 的内部调用顺序：
+The internal call sequence of COBIA `CapeThermoEquilibriumRoutineAdapter`:
 
 ```
-PME 调用 CalcEquilibrium(spec1, spec2, solutionType)
-  └── COBIA Adapter 内部:
+PME calls CalcEquilibrium(spec1, spec2, solutionType)
+  └── Inside COBIA Adapter:
        ├─ ① CheckEquilibriumSpec(spec1, spec2, solutionType)
        │    └─ false → throw "CalcEquilibrium failed: Invalid operation"
-       │               （CalcEquilibrium 不会被调用！）
+       │               (CalcEquilibrium is never called!)
        └─ ② CalcEquilibrium(spec1, spec2, solutionType)
-            （仅在 ① 返回 true 时执行）
+            (only executes if ① returns true)
 ```
 
-> ⚠️ **致命陷阱**：如果在 `CheckEquilibriumSpec` 中返回 `false`，`CalcEquilibrium` 根本不会执行。异常消息前缀却是 "CalcEquilibrium failed"，极易误导。WaterPP 改为 `return true` 后问题解决。
+> ⚠️ **Fatal trap**: If `CheckEquilibriumSpec` returns `false`, `CalcEquilibrium` will never execute. But the exception message prefix is "CalcEquilibrium failed", which is highly misleading. WaterPP was fixed by changing to `return true`.
 
-**Spec 解析**（5 个属性 × 9 种组合）：
+**Spec parsing** (5 properties × 9 combinations):
 
 ```
 specification[i] = [propertyName, basis, phase, compoundId]
                       [0]         [1]    [2]       [3]
 ```
 
-| propertyName | 含义 | phase | 支持组合 |
-|:-----------:|------|:----:|------|
+| propertyName | Meaning | phase | Supported combinations |
+|:------------:|---------|:-----:|------------------------|
 | `temperature` | T | `overall` | TP, TVF, TH, TS |
 | `pressure` | P | `overall` | TP, PVF, PH, PS |
 | `phasefraction` | VF | `vapor`/`liquid` | TVF, PVF, HVF, SVF |
-| `vaporfraction` | VF 别名 | `vapor`/`liquid` | 同上 |
+| `vaporfraction` | VF alias | `vapor`/`liquid` | same as above |
 | `enthalpy` | H | `overall` | PH, TH, HVF |
 | `entropy` | S | `overall` | PS, TS, SVF |
 
-9 种闪蒸的 spec 组合：
+9 flash spec combinations:
 
-| 闪蒸 | spec1 | spec2 |
-|:---:|-------|-------|
+| Flash | spec1 | spec2 |
+|:-----:|-------|-------|
 | **TP** | temperature | pressure |
 | **TVF** | temperature | phasefraction |
 | **PVF** | pressure | phasefraction |
@@ -721,7 +724,7 @@ specification[i] = [propertyName, basis, phase, compoundId]
 | **HVF** | enthalpy | phasefraction |
 | **SVF** | entropy | phasefraction |
 
-**Spec 解析的安全写法**（大小写兼容 + 错误标签）：
+**Safe spec parsing** (case-insensitive + error labels):
 
 ```cpp
 void WaterPP::CalcEquilibrium(
@@ -731,20 +734,20 @@ void WaterPP::CalcEquilibrium(
 {
     if (!hasMaterial) return;
 
-    // 1. 转换为小写（大小写兼容）
+    // 1. Convert to lowercase (case-insensitive)
     std::wstring spec1 = static_cast<std::wstring>(specification1[0]);
     std::wstring spec2 = static_cast<std::wstring>(specification2[0]);
     for (auto& c : spec1) c = towlower(c);
     for (auto& c : spec2) c = towlower(c);
 
-    // 2. 解析 spec，设置标志
+    // 2. Parse specs, set flags
     bool haveT = false, haveP = false, haveVF = false, haveH = false, haveS = false;
     for (int i = 0; i < 2; ++i) {
         std::wstring s     = (i == 0) ? spec1 : spec2;
         auto& specArr      = (i == 0) ? specification1 : specification2;
         std::wstring phase = static_cast<std::wstring>(specArr[2]);
         std::wstring basis = static_cast<std::wstring>(specArr[1]);
-        for (auto& c : phase) c = towlower(c);  // ← 大小写兼容
+        for (auto& c : phase) c = towlower(c);  // ← case-insensitive
         for (auto& c : basis) c = towlower(c);
 
         if (s == L"temperature") {
@@ -758,7 +761,7 @@ void WaterPP::CalcEquilibrium(
             haveP = true;
         }
         else if (s == L"phasefraction" || s == L"vaporfraction") {
-            // ↑ 注意：比较字符串必须和 towlower 后一致（全小写）
+            // ↑ Note: comparison strings must match towlower result (all lowercase)
             if (phase != L"vapor" && phase != L"liquid")
                 throw cape_open_error("EQ-VF-PHASE");
             haveVF = true;
@@ -766,12 +769,12 @@ void WaterPP::CalcEquilibrium(
         else if (s == L"enthalpy")  { haveH = true; }
         else if (s == L"entropy")   { haveS = true; }
         else {
-            std::wstring msg = L"EQ-UNKNOWN: " + s;  // ← 诊断标签
+            std::wstring msg = L"EQ-UNKNOWN: " + s;  // ← diagnostic label
             throw cape_open_error(msg.c_str());
         }
     }
 
-    // 3. 根据标志组合分发到对应闪存逻辑
+    // 3. Dispatch to corresponding flash logic based on flag combinations
     if      (haveT && haveP)  { /* TP  */ }
     else if (haveT && haveVF) { /* TVF */ }
     else if (haveP && haveVF) { /* PVF */ }
@@ -785,7 +788,7 @@ void WaterPP::CalcEquilibrium(
 }
 ```
 
-### 3.4 通用常数（ICapeThermoUniversalConstant）
+### 3.4 Universal Constants (ICapeThermoUniversalConstant)
 
 ```cpp
 void getUniversalConstantList(COBIA::CapeArrayString list) {
@@ -810,39 +813,39 @@ void GetUniversalConstant(COBIA::CapeArrayString props, COBIA::CapeArrayValue va
 
 ---
 
-## 四、调试与排错 — 实战经验
+## 4. Debugging & Troubleshooting — Real-World Experience
 
-### 4.1 错误标签系统（最重要的调试技巧）
+### 4.1 Error Label System (Most Important Debugging Tip)
 
-COBIA 抛出的异常消息在 COFE 日志中显示。但如果你 20 个 `throw` 全都用相同的 `COBIAERR_InvalidOperation`，你无法判断是哪个位置出错。
+Exception messages thrown by COBIA appear in the COFE log. But if all 20 of your `throw` statements use the same `COBIAERR_InvalidOperation`, you won't be able to tell which location errored.
 
-**正确做法**：每个 `throw` 带上唯一标签：
+**Correct approach**: Attach a unique label to every `throw`:
 
 ```cpp
-// ❌ 无标签 — 无法定位
+// ❌ No label — can't locate
 throw cape_open_error(COBIAERR_InvalidOperation);
 
-// ✅ 有标签 — 日志直接告诉你问题在哪
+// ✅ With label — log directly tells you where the problem is
 throw cape_open_error(COBIATEXT("EQ-T: invalid temperature spec"));
 throw cape_open_error(COBIATEXT("EQ-FLASH-T: invalid T for TP flash"));
 throw cape_open_error(COBIATEXT("EQ-UNKNOWN: ") + propertyName);
 ```
 
-标签命名约定：`{模块}-{子模块}: {描述}`
+Label naming convention: `{Module}-{SubModule}: {Description}`
 
-| 标签 | 含义 |
-|------|------|
-| `EQ-T` | CalcEquilibrium — T spec 解析失败 |
-| `EQ-READ-T` | CalcEquilibrium — T 值读取无效 |
-| `EQ-FLASH-T` | CalcEquilibrium — TP flash T 无效 |
-| `EQ-VF-PHASE` | CalcEquilibrium — phaseFraction 的 phase 不对 |
-| `EQ-UNKNOWN: xxx` | CalcEquilibrium — 未知属性名（日志会显示属性名） |
-| `EQ-SOL` | CalcEquilibrium — solutionType 不支持 |
-| `EQ-COMPID` | CalcEquilibrium — compoundId 非空（纯组分不接受） |
+| Label | Meaning |
+|-------|---------|
+| `EQ-T` | CalcEquilibrium — T spec parse failed |
+| `EQ-READ-T` | CalcEquilibrium — T value read invalid |
+| `EQ-FLASH-T` | CalcEquilibrium — TP flash T invalid |
+| `EQ-VF-PHASE` | CalcEquilibrium — phaseFraction phase wrong |
+| `EQ-UNKNOWN: xxx` | CalcEquilibrium — unknown property name (log shows the name) |
+| `EQ-SOL` | CalcEquilibrium — solutionType not supported |
+| `EQ-COMPID` | CalcEquilibrium — compoundId non-empty (pure component rejects this) |
 
-### 4.2 COFE 日志解读
+### 4.2 COFE Log Interpretation
 
-COFE 日志中的错误消息格式：
+Error message format in COFE log:
 
 ```
 warning: Material object error in CalcEquilibrium:
@@ -850,100 +853,100 @@ CalcEquilibrium failed: in ICapeThermoEquilibriumRoutine::CalcEquilibrium
 of WaterPPPropertyPackage: EQ-UNKNOWN: phasefraction
 ```
 
-解读方法：
+How to interpret:
 
-| 日志片段 | 告诉你的信息 |
-|---------|------------|
-| `in ICapeThermoEquilibriumRoutine::CalcEquilibrium` | 出错的接口和方法 |
-| `of WaterPPPropertyPackage` | 出错的 PP 类 |
-| `EQ-UNKNOWN: phasefraction` | 你的诊断标签：spec 属性名 "phasefraction" 未被识别 |
-| `(4x)` | 同一错误连续出现了 4 次 |
+| Log fragment | What it tells you |
+|--------------|-------------------|
+| `in ICapeThermoEquilibriumRoutine::CalcEquilibrium` | The interface and method that errored |
+| `of WaterPPPropertyPackage` | The PP class that errored |
+| `EQ-UNKNOWN: phasefraction` | Your diagnostic label: spec property name "phasefraction" was not recognized |
+| `(4x)` | Same error appeared 4 consecutive times |
 
-> "phasefraction" 未识别 → 进入 else 分支抛出 `EQ-UNKNOWN` → 检查 spec 解析代码，发现比较字符串 `L"phaseFraction"`（大写F）和 towlower 后的 "phasefraction"（小写f）不匹配。
+> "phasefraction" not recognized → entered else branch throwing `EQ-UNKNOWN` → check spec parsing code, found that the comparison string `L"phaseFraction"` (capital F) didn't match the towlower'd "phasefraction" (lowercase f).
 
-### 4.3 单位验证
+### 4.3 Unit Verification
 
-COFE 输出物性表后，用少量手算验证单位是否正确：
+After COFE outputs a property table, verify units with a quick hand calculation:
 
-以水在 99°C / 0.1 MPa 液态为例：
+Using water at 99°C / 0.1 MPa liquid as an example:
 
-| 属性 | 近似理论值 | 如果显示 1000× | 问题 |
-|------|:---:|:---:|------|
-| enthalpy (J/mol) | ~7,550 | ~7,550,000 | `* MOLWT * 1e3` 多乘了 1000 |
-| Cp (J/(mol·°C)) | ~76 | ~76,000 | 同上 |
-| density (mol/m³) | ~53,200 | — | 这个一般正确 |
-| viscosity (Pa·s) | ~2.8×10⁻⁴ | — | 这个一般正确 |
+| Property | Approximate theoretical value | If showing 1000× | Issue |
+|----------|:----------------------------:|:----------------:|-------|
+| enthalpy (J/mol) | ~7,550 | ~7,550,000 | `* MOLWT * 1e3` multiplied by extra 1000 |
+| Cp (J/(mol·°C)) | ~76 | ~76,000 | same as above |
+| density (mol/m³) | ~53,200 | — | this one is generally correct |
+| viscosity (Pa·s) | ~2.8×10⁻⁴ | — | this one is generally correct |
 
-**快速心算验证法**：水 100°C 液态质量焓 ≈ 419 kJ/kg，摩尔质量 ≈ 0.018 kg/mol：
+**Quick mental verification**: Water at 100°C liquid mass enthalpy ≈ 419 kJ/kg, molar mass ≈ 0.018 kg/mol:
 ```
 J/mol = 419 × 1000 × 0.018 = 7,542 J/mol
 ```
-如果你的输出是 7,542,000，就知道多乘了 1000。
+If your output is 7,542,000, you know you multiplied by an extra 1000.
 
-### 4.4 常见错误速查
+### 4.4 Common Error Quick Reference
 
-| 症状 | 可能原因 | 检查 |
-|------|---------|------|
-| COFE 中看不到 PP | Register 未调用 addCatID | 确认 `registrar.addCatID(CAPEOPEN::categoryId_PropertyPackageManager)` |
-| 加载后 T 变 100°C, P 变 1atm | try-catch 静默吞没异常使用默认值 | 移除所有 `catch(...){}` |
-| "Invalid base specified" | T/P 的 basis 传了空字符串 | 改为 `nullptr` |
-| "invalid basis for fraction" | fraction 的 basis 传了空字符串 | 改为 `"mole"` |
-| "Invalid operation" (无标签) | CheckEquilibriumSpec 返回 false | 改为 `return true` |
-| EQ-UNKNOWN (4x) | spec 属性名大小写不匹配 | spec 字符串和比较常量都做 `towlower` |
-| 所有 thermo 值偏大 1000 倍 | `* MOLWT * 1e3` 写成了 `* MOLWT` 的正确形式 | 参考 3.2 节单位推导 |
+| Symptom | Likely Cause | Check |
+|---------|--------------|-------|
+| PP not visible in COFE | Register didn't call addCatID | Verify `registrar.addCatID(CAPEOPEN::categoryId_PropertyPackageManager)` |
+| After loading, T becomes 100°C, P becomes 1atm | try-catch silently swallowing exceptions using defaults | Remove all `catch(...){}` |
+| "Invalid base specified" | T/P basis passed as empty string | Change to `nullptr` |
+| "invalid basis for fraction" | fraction basis passed as empty string | Change to `"mole"` |
+| "Invalid operation" (no label) | CheckEquilibriumSpec returned false | Change to `return true` |
+| EQ-UNKNOWN (4x) | spec property name case mismatch | Apply `towlower` to both spec strings and comparison constants |
+| All thermo values 1000× too large | Bug `* MOLWT * 1e3` instead of correct `* MOLWT` | See §3.2 unit derivation |
 
-### 4.5 Spec 解析大小写陷阱
+### 4.5 Spec Parsing Case-Sensitivity Trap
 
-不同 PME 发送的字符串大小写可能不同：
+Different PMEs may send strings with different casing:
 
-| PME 可能发送 | 你的代码中 | 后果 |
-|:---:|:---:|------|
-| `"overall"` | `L"Overall"` | phase 匹配失败 |
-| `"temperature"` | `L"Temperature"` | 属性名匹配失败 |
-| `"Unspecified"` | `L"unspecified"` | solutionType 匹配失败 |
-| `"Normal"` | `L"normal"` | solutionType 匹配失败 |
+| PME may send | Your code has | Consequence |
+|:------------:|:------------:|-------------|
+| `"overall"` | `L"Overall"` | phase match fails |
+| `"temperature"` | `L"Temperature"` | property name match fails |
+| `"Unspecified"` | `L"unspecified"` | solutionType match fails |
+| `"Normal"` | `L"normal"` | solutionType match fails |
 
-**唯一解**：对**所有**参与比较的字符串都做 `towlower`，且**比较常量也用全小写**。
+**The only solution**: Apply `towlower` to **all** strings involved in comparison, and use **all lowercase** for comparison constants.
 
 ```cpp
-// ✅ 全小写方案
+// ✅ All-lowercase approach
 std::wstring s = static_cast<std::wstring>(specArr[0]);
-for (auto& c : s) c = towlower(c);       // 输入 → 小写
+for (auto& c : s) c = towlower(c);       // input → lowercase
 // ...
-if (s == L"temperature") { ... }          // 常量也是小写
-if (s == L"phasefraction") { ... }        // 常量也是小写（不能写成 phaseFraction）
-if (s == L"vaporfraction") { ... }        // 常量也是小写
+if (s == L"temperature") { ... }          // constants also lowercase
+if (s == L"phasefraction") { ... }        // constants also lowercase (not phaseFraction)
+if (s == L"vaporfraction") { ... }        // constants also lowercase
 ```
 
-### 4.6 开发工作流
+### 4.6 Development Workflow
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  1. 关闭 COFE（COM 缓存必须释放）                    │
-│  2. 编译 DLL                                       │
-│  3. 反注册旧 DLL (cobiaRegister -u)                 │
-│  4. 注册新 DLL (cobiaRegister -a)                   │
-│  5. 打开 COFE → 添加 PP → 新建 Stream → 测试          │
-│  6. 查看 COFE 日志（View → Log）                     │
-│  7. 根据日志中的诊断标签定位问题                       │
-│  8. 返回步骤 1                                      │
+│  1. Close COFE (COM cache must be released)        │
+│  2. Build DLL                                       │
+│  3. Unregister old DLL (cobiaRegister -u)           │
+│  4. Register new DLL (cobiaRegister -a)             │
+│  5. Open COFE → Add PP → New Stream → Test         │
+│  6. View COFE log (View → Log)                     │
+│  7. Locate issue from diagnostic labels in log      │
+│  8. Return to step 1                               │
 └──────────────────────────────────────────────────┘
 ```
 
-> ⚠️ 如果只编译不注册，COFE 加载的还是旧 DLL。反注册再注册是最安全的方式。
+> ⚠️ If you only build without re-registering, COFE still loads the old DLL. Unregister then re-register is the safest approach.
 
 ---
 
-## 五、通用实现模式
+## 5. Universal Implementation Patterns
 
-以下模式在 WaterPP 和 IdealGasPP 中均被验证有效，适用于任意 COBIA 物性包。
+The following patterns have been verified effective in both WaterPP and IdealGasPP, and apply to any COBIA property package.
 
-### 5.1 Adapter 继承全景
+### 5.1 Adapter Inheritance Panorama
 
-无论单组分还是多组分，必须继承同一套 8 个 Adapter：
+Regardless of single-component or multi-component, you must inherit the same set of 8 Adapters:
 
 ```cpp
-// 通用模板 — 将 WaterPPPropertyPackage 替换为你的类名
+// Universal template — replace WaterPPPropertyPackage with your class name
 class YourPP :
     public COBIA::CapeOpenObject<YourPP>,
     public CapeThermoPropertyPackageManagerAdapter<YourPP>,  // ①
@@ -956,11 +959,11 @@ class YourPP :
     public CapeUtilitiesAdapter<YourPP>;                   // ⑧
 ```
 
-均为 CRTP 模式（`Adapter<T>`），Adapter 在编译期通过 `static_cast<T*>` 调用你的重写方法。不需要手动实现 `QueryInterface`、`AddRef`、`Release`。
+All are CRTP pattern (`Adapter<T>`). The Adapter calls your overridden methods at compile time via `static_cast<T*>`. No need to manually implement `QueryInterface`, `AddRef`, `Release`.
 
-### 5.2 化合物数据库模式（多组分专用）
+### 5.2 Compound Database Pattern (Multi-Component Specific)
 
-IdealGasPP 使用 `std::vector<CompoundData>` 存储化合物参数，适用于 N 种组分的任意组合：
+IdealGasPP uses `std::vector<CompoundData>` to store compound parameters, suitable for arbitrary combinations of N components:
 
 ```cpp
 struct CompoundData {
@@ -968,26 +971,26 @@ struct CompoundData {
     std::wstring formula;  // "N2"
     double mw;             // 28.0134 g/mol
     double cpA, cpB, cpC, cpD, cpE;  // Cp = A + B*T + C*T² + ...
-    double H0;             // 标准焓 J/mol @ Tref
-    double S0;             // 标准熵 J/(mol·K) @ Tref,Pref
+    double H0;             // Standard enthalpy J/mol @ Tref
+    double S0;             // Standard entropy J/(mol·K) @ Tref,Pref
 };
-std::vector<CompoundData> compoundDB;  // 化合物数据库
+std::vector<CompoundData> compoundDB;  // Compound database
 ```
 
-**组分校验函数** — 每次属性计算前验证 Material 中的 fraction 与数据库一致：
+**Compound validation function** — Verify that the Material's fractions match the database before every property calculation:
 
 ```cpp
 void CheckCompounds() {
     if (compoundsChecked) return;
-    // 从 Material 读取 fraction，验证 count 匹配 + sum≈1
+    // Read fractions from Material, verify count match + sum≈1
     ...
     compoundsChecked = true;
 }
 ```
 
-> 💡 `CheckCompounds` 只在首次调用时执行，后续 `compoundsChecked=true` 跳过。UnsetMaterial 时重置。
+> 💡 `CheckCompounds` only executes on first call; subsequent calls skip via `compoundsChecked=true`. Reset on `UnsetMaterial`.
 
-### 5.3 内部枚举 — 避免字符串比较
+### 5.3 Internal Enums — Avoid String Comparisons
 
 ```cpp
 enum SinglePhaseProp {
@@ -997,7 +1000,7 @@ enum SinglePhaseProp {
     SPP_THERMAL_CONDUCTIVITY, SPP_VOLUME, SPP_VISCOSITY
 };
 
-// 字符串 → 枚举映射
+// String → enum mapping
 bool getSinglePhasePropEnum(const std::wstring& name, SinglePhaseProp& result) {
     if (name == L"density")           { result = SPP_DENSITY; return true; }
     if (name == L"enthalpy")          { result = SPP_ENTHALPY; return true; }
@@ -1006,14 +1009,14 @@ bool getSinglePhasePropEnum(const std::wstring& name, SinglePhaseProp& result) {
 }
 ```
 
-> 💡 只在入口处做一次字符串→枚举转换，后续 switch-case 直接比较整数，比反复比较字符串高效。
+> 💡 Only do string→enum conversion once at entry; subsequent switch-case compares integers directly, much faster than repeated string comparisons.
 
-### 5.4 单位链全景图
+### 5.4 Complete Unit Chain Diagram
 
 ```
              ┌─────────────────────────────────────┐
              │          COFE / PME                  │
-             │   COBIA 接口，mole basis (J/mol)     │
+             │   COBIA interface, mole basis (J/mol)│
              └──────────────┬──────────────────────┘
                             │
     GetOverallProp          │          SetSinglePhaseProp
@@ -1026,57 +1029,57 @@ bool getSinglePhasePropEnum(const std::wstring& name, SinglePhaseProp& result) {
     └───────┬───────┘       │       └───────┬───────┘
             ↓               │               ↑
     ┌───────────────────────────────────────────────┐
-    │        Water 引擎 (IAPWS-97)                  │
-    │        内部单位：kJ/kg, MPa, K                 │
+    │        Water Engine (IAPWS-97)                │
+    │        Internal units: kJ/kg, MPa, K          │
     │        w.enthalpy() → kJ/kg                   │
     │        w.SetStatePH(P_MPa, kJ/kg)             │
     └───────────────────────────────────────────────┘
 ```
 
-**关键转换点**：
-- **入读**：Mass basis 读入 `GetOverallProp("enthalpy", "mass")` → J/kg → ×1e-3 → kJ/kg
-- **出入桥**：IAPWS 内部是 kJ/kg
-- **输出**：`w.enthalpy()` → kJ/kg → ×MOLWT → J/mol (mole basis)
+**Key conversion points**:
+- **Input read**: Mass basis read `GetOverallProp("enthalpy", "mass")` → J/kg → ×1e-3 → kJ/kg
+- **Internal bridge**: IAPWS internal is kJ/kg
+- **Output**: `w.enthalpy()` → kJ/kg → ×MOLWT → J/mol (mole basis)
 
-### 5.5 CheckEquilibriumSpec 的正确策略
+### 5.5 Correct Strategy for CheckEquilibriumSpec
 
 ```cpp
 COBIA::CapeBoolean CheckEquilibriumSpec(
     COBIA::CapeArrayString, COBIA::CapeArrayString, COBIA::CapeString)
 {
-    return true;  // 不做阻拦，验证逻辑放在 CalcEquilibrium 内部
+    return true;  // Don't block; put validation logic inside CalcEquilibrium
 }
 ```
 
-原因：COBIA Adapter 在 `CalcEquilibrium` 之前调用 `CheckEquilibriumSpec`。如果此处返回 `false`，CalcEquilibrium 不会执行。首次调用时 PresentPhases 可能尚未设置，做 phase 检查会导致误判。
+Reason: The COBIA Adapter calls `CheckEquilibriumSpec` before `CalcEquilibrium`. If this returns `false`, CalcEquilibrium never executes. On first call, PresentPhases may not be set yet, so phase checks here would produce false negatives.
 
-### 5.6 闪蒸分发模式
+### 5.6 Flash Dispatch Pattern
 
-无论单组分还是多组分，`CalcEquilibrium` 都遵循同一模板：
+Regardless of single-component or multi-component, `CalcEquilibrium` follows the same template:
 
 ```
-1. 解析 spec1/spec2 → 设置 haveT/haveP/haveVF/haveH/haveS 标志
-2. 验证 solutionType
-3. 按 haveX 组合读取 T/P/fraction（TP 用 GetOverallTPFraction，其他用 GetOverallProp）
-4. 分发闪蒸类型 → 计算 resultT / resultP / resultVapFrac
+1. Parse spec1/spec2 → set haveT/haveP/haveVF/haveH/haveS flags
+2. Validate solutionType
+3. Read T/P/fraction by haveX combination (TP uses GetOverallTPFraction, others use GetOverallProp)
+4. Dispatch flash type → compute resultT / resultP / resultVapFrac
 5. SetPresentPhases → SetSinglePhaseProp(T/P/fraction/phaseFraction) → SetOverallProp(T/P)
 ```
 
-**TP flash vs VF-based flash 的分支逻辑**：
+**TP flash vs VF-based flash branch logic**:
 
 ```cpp
-// 单组分 2 相（WaterPP）：需算 Psat/Tsat 确定相边界
-if (haveT && haveP) {      /* TP: 算相平衡，得 vapFrac */ }
-else if (haveT && haveVF) { /* TVF: T 已知，P=Psat(T) */ }
-else if (haveP && haveVF) { /* PVF: P 已知，T=Tsat(P) */ }
+// Single-component 2-phase (WaterPP): must compute Psat/Tsat to determine phase boundary
+if (haveT && haveP) {      /* TP: compute phase equilibrium, get vapFrac */ }
+else if (haveT && haveVF) { /* TVF: T known, P=Psat(T) */ }
+else if (haveP && haveVF) { /* PVF: P known, T=Tsat(P) */ }
 
-// 多组分 1 相（IdealGasPP）：无需相平衡，直接设全气相
-if (haveT && haveP) { /* TP: 直接使用 T/P */ }
+// Multi-component 1-phase (IdealGasPP): no phase equilibrium, directly set all-vapor
+if (haveT && haveP) { /* TP: use T/P directly */ }
 if (haveH && !haveT) { /* PH: T += (Htarget-Href)/Cp */ }
-// VF-based flash 同单相，读取 VF 后直接写入
+// VF-based flash same as single-phase, read VF then write directly
 ```
 
-**写入 Material 的标准顺序**（两种 PP 一致）：
+**Standard order for writing to Material** (consistent across both PP types):
 ```
 1. SetPresentPhases(phaseLabels, phaseStatus)
 2. SetSinglePhaseProp("fraction",      phase, "mole",   x)
@@ -1087,9 +1090,9 @@ if (haveH && !haveT) { /* PH: T += (Htarget-Href)/Cp */ }
 7. SetOverallProp("pressure",          nullptr, P)
 ```
 
-### 5.7 多组分 GetCompoundConstant 模式
+### 5.7 Multi-Component GetCompoundConstant Pattern
 
-单组分 PP 用 if-else 逐属性返回即可，多组分则需要循环 + 映射表：
+Single-component PP can use if-else per property. Multi-component requires loops + lookup table:
 
 ```cpp
 void GetCompoundConstant(CapeArrayString props, CapeArrayString compIds,
@@ -1098,70 +1101,70 @@ void GetCompoundConstant(CapeArrayString props, CapeArrayString compIds,
     missing = false;
     for (size_t j = 0; j < compIds.size(); ++j) {
         std::wstring cid = static_cast<std::wstring>(compIds[j]);
-        int ci = findCompound(cid);  // 在 compoundDB 中查找
+        int ci = findCompound(cid);  // find in compoundDB
         if (ci < 0) { missing = true; continue; }
         const CompoundData& comp = compoundDB[ci];
         for (size_t i = 0; i < props.size(); ++i) {
             std::wstring pn = static_cast<std::wstring>(props[i]);
-            size_t idx = i * compIds.size() + j;  // CAPE-OPEN 行优先排列
+            size_t idx = i * compIds.size() + j;  // CAPE-OPEN row-major layout
             if (pn == L"molecularWeight")
                 vals[idx].Set(CapeDouble(comp.mw));
             else if (pn == L"boilingTemperature")
                 vals[idx].Set(CapeDouble(comp.boilT));
-            // ... 其他属性
+            // ... other properties
             else missing = true;
         }
     }
 }
 ```
 
-> ⚠️ 多组分属性值的索引是 `i * compIds.size() + j`（行优先），不是 `j * props.size() + i`。
+> ⚠️ The index for multi-component property values is `i * compIds.size() + j` (row-major), **not** `j * props.size() + i`.
 
 ---
 
-## 六、修复历史与分析
+## 6. Fix History & Analysis
 
-从初始版本到稳定经历的关键 Bug 及其通用教训。适用于 WaterPP 和 IdealGasPP 两类。
+Key bugs and their universal lessons from initial version to stable. Applicable to both WaterPP and IdealGasPP.
 
-### 通用教训速查
+### Universal Lessons Quick Reference
 
-| 版本/来源 | 关键修复 | 通用教训 |
-|:--:|------|------|
-| WaterPP v1.0.1 | CheckCompounds 空实现→完整校验 | **初始化方法不能留空** |
-| WaterPP v1.0.2 | 移除所有 try-catch 静默吞没 | **永远不要让异常静默** |
-| WaterPP v1.0.3 | getPDependentPropList 显式 setsize(0) | **空数组也要初始化（resize(0)）** |
-| WaterPP v1.0.4 | CheckEquilibriumSpec 改为 `return true` | **理解 Adapter 调用链** |
-| WaterPP v1.0.4 | H/S 读取改为 mass basis | **输入输出单位要一致** |
-| WaterPP v1.0.4 | spec 解析加 towlower | **大小写兼容** |
-| WaterPP v1.0.5 | 比较常量同步改小写 | **towlower 是全有或全无** |
-| WaterPP v1.0.6 | `* MOLWT * 1e3` → `* MOLWT` | **推导公式，不要猜** |
-| IdealGasPP v1.0 | T/P basis `""` → `nullptr` | **"Invalid base specified" = basis 错了** |
-| IdealGasPP v1.0 | CalcEquilibrium 只支持 TP/PH | **9 种闪蒸类型都应支持，否则 PME 会反复 fallback** |
-| IdealGasPP v1.0 | fraction sum≈1 未校验 | **多组分必须校验 fraction 的 count 和 sum** |
-| IdealGasPP v1.0 | 缺少 CapeUtilitiesAdapter | **8 个 Adapter 缺一不可** |
-| IdealGasPP v1.0 | GetOverallTPFraction 用于 VF flash | **TP flash 和 VF flash 应走不同读路径** |
+| Version/Source | Key Fix | Universal Lesson |
+|:--------------:|---------|------------------|
+| WaterPP v1.0.1 | CheckCompounds empty impl→full validation | **Don't leave init methods empty** |
+| WaterPP v1.0.2 | Removed all try-catch silent swallowing | **Never let exceptions go silent** |
+| WaterPP v1.0.3 | getPDependentPropList explicit setsize(0) | **Empty arrays must also be initialized (resize(0))** |
+| WaterPP v1.0.4 | CheckEquilibriumSpec changed to `return true` | **Understand the Adapter call chain** |
+| WaterPP v1.0.4 | H/S reads changed to mass basis | **Input/output units must be consistent** |
+| WaterPP v1.0.4 | Spec parsing added towlower | **Case-insensitive handling** |
+| WaterPP v1.0.5 | Comparison constants synced to lowercase | **towlower is all-or-nothing** |
+| WaterPP v1.0.6 | `* MOLWT * 1e3` → `* MOLWT` | **Derive formulas, don't guess** |
+| IdealGasPP v1.0 | T/P basis `""` → `nullptr` | **"Invalid base specified" = wrong basis** |
+| IdealGasPP v1.0 | CalcEquilibrium only supports TP/PH | **All 9 flash types should be supported, otherwise PME repeatedly falls back** |
+| IdealGasPP v1.0 | fraction sum≈1 not validated | **Multi-component must validate fraction count and sum** |
+| IdealGasPP v1.0 | Missing CapeUtilitiesAdapter | **All 8 Adapters are mandatory — not one less** |
+| IdealGasPP v1.0 | GetOverallTPFraction used for VF flash | **TP flash and VF flash should take different read paths** |
 
 ---
 
-## 七、参考资源
+## 7. Reference Resources
 
-### 本项目源码
+### Project Source Code
 
-| 资源 | 路径 | 类型 |
-|------|------|------|
-| WaterPP 完整实现 | `ChemProp\WaterPP\WaterPP.cpp` + `WaterPP.h` | 单组分 2 相示例 |
-| Water 物性引擎 | `ChemProp\WaterPP\Water.cpp` + `Water.h` | IAPWS-97 纯数学 |
-| IdealGasPP 完整实现 | `ChemProp\IdealGasPP\IdealGasPP.cpp` + `IdealGasPP.h` | 多组分 1 相示例 |
-| CMake 构建脚本 | `ChemProp\WaterPP\CMakeLists.txt` / `ChemProp\IdealGasPP\CMakeLists.txt` | 构建模板 |
+| Resource | Path | Type |
+|----------|------|------|
+| WaterPP complete implementation | `ChemProp\WaterPP\WaterPP.cpp` + `WaterPP.h` | Single-component 2-phase example |
+| Water property engine | `ChemProp\WaterPP\Water.cpp` + `Water.h` | IAPWS-97 pure math |
+| IdealGasPP complete implementation | `ChemProp\IdealGasPP\IdealGasPP.cpp` + `IdealGasPP.h` | Multi-component 1-phase example |
+| CMake build scripts | `ChemProp\WaterPP\CMakeLists.txt` / `ChemProp\IdealGasPP\CMakeLists.txt` | Build templates |
 
-### 外部资源
+### External Resources
 
-| 资源 | 路径/链接 |
-|------|---------|
-| COBIA SDK 头文件 | `C:\Program Files (x86)\Common Files\CAPE-OPEN Laboratories Network\Include\` |
-| cobiaRegister 注册工具 | `C:\Program Files\Common Files\CAPE-OPEN Laboratories Network\COBIA\` |
-| CapeWizard 代码生成器 | 同上目录 |
-| COFE (PME 测试) | https://www.amsterchem.com/cofe.html |
-| CAPE-OPEN 标准 | https://www.colan.org/ |
+| Resource | Path/Link |
+|----------|-----------|
+| COBIA SDK headers | `C:\Program Files (x86)\Common Files\CAPE-OPEN Laboratories Network\Include\` |
+| cobiaRegister registration tool | `C:\Program Files\Common Files\CAPE-OPEN Laboratories Network\COBIA\` |
+| CapeWizard code generator | Same directory as above |
+| COFE (PME testing) | https://www.amsterchem.com/cofe.html |
+| CAPE-OPEN Standard | https://www.colan.org/ |
 | IAPWS-97 | http://www.iapws.org/ |
 | MinGW-w64 (MSYS2) | https://www.msys2.org/ |
