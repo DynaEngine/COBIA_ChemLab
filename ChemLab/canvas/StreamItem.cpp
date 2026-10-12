@@ -16,14 +16,13 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsScene>
 
-static constexpr qreal DIST = 50.0;
-static constexpr qreal MARGIN = 10.0;
 static constexpr qreal SNAP_DIST = 20.0;
 
 StreamItem::StreamItem(PortItem* from, PortItem* to, QGraphicsItem* parent)
 	: QGraphicsPathItem(parent)
 	, m_source(from)
 	, m_dest(to)
+	, m_routingCtx(cr_routing_create("orthogonal"))
 {
 	setZValue(-1);
 	setActive(false);
@@ -36,12 +35,18 @@ StreamItem::StreamItem(const QPointF& start, const QPointF& end, QGraphicsItem* 
 	: QGraphicsPathItem(parent)
 	, m_freeStart(start)
 	, m_freeEnd(end)
+	, m_routingCtx(cr_routing_create("orthogonal"))
 {
 	setZValue(-1);
 	setActive(false);
 	setAcceptHoverEvents(true);
 	setFlag(QGraphicsItem::ItemIsSelectable);
 	updatePath();
+}
+
+StreamItem::~StreamItem()
+{
+	cr_routing_destroy(m_routingCtx);
 }
 
 QPointF StreamItem::startPoint() const
@@ -96,7 +101,7 @@ void StreamItem::updatePath()
 	QPointF sp = startPoint();
 	QPointF ep = endPoint();
 
-	if (isConnected()) {
+	if (isConnected() && m_routingCtx) {
 		QRectF rectA = m_source->unitItem() ? m_source->unitItem()->sceneBoundingRect()
 			: QRectF(sp, QSizeF(1, 1));
 		QRectF rectB = m_dest->unitItem() ? m_dest->unitItem()->sceneBoundingRect()
@@ -104,16 +109,37 @@ void StreamItem::updatePath()
 
 		char sideA = m_source->side().toLatin1();
 		char sideB = m_dest->side().toLatin1();
-		qreal locA = m_source->loc();
-		qreal locB = m_dest->loc();
 
-		QList<QPointF> pts = routePath(rectA, rectB, sp, ep, sideA, sideB, locA, locB);
-		buildPath(pts);
+		auto toCrSide = [](char c) -> cr_side_t {
+			switch (c) {
+			case 'E': return CR_SIDE_E;
+			case 'W': return CR_SIDE_W;
+			case 'N': return CR_SIDE_N;
+			case 'S': return CR_SIDE_S;
+			default:  return CR_SIDE_E;
+			}
+		};
+
+		cr_rect_t cra = { rectA.x(), rectA.y(), rectA.width(), rectA.height() };
+		cr_rect_t crb = { rectB.x(), rectB.y(), rectB.width(), rectB.height() };
+		cr_point_t cpa = { sp.x(), sp.y() };
+		cr_point_t cpb = { ep.x(), ep.y() };
+
+		cr_point_t out[32];
+		int n = cr_routing_compute(m_routingCtx,
+			&cra, &crb, &cpa, &cpb,
+			toCrSide(sideA), toCrSide(sideB),
+			m_source->loc(), m_dest->loc(),
+			out, 32);
+
+		m_cachedPts.clear();
+		for (int i = 0; i < n && i < 32; i++)
+			m_cachedPts.append(QPointF(out[i].x, out[i].y));
 	} else {
-		QList<QPointF> pts = { sp, ep };
-		buildPath(pts);
+		m_cachedPts = { sp, ep };
 	}
 
+	buildPath(m_cachedPts);
 	updateLabel();
 }
 
@@ -131,29 +157,24 @@ void StreamItem::buildPath(const QList<QPointF>& pts)
 QList<StreamSegment> StreamItem::segments() const
 {
 	QList<StreamSegment> segs;
-	QPainterPath p = path();
-	if (p.isEmpty()) return segs;
+	int npts = m_cachedPts.size();
+	if (npts < 2) return segs;
 
-	QPolygonF poly = p.toFillPolygon();
-	for (int i = 0; i < poly.size() - 1; ++i) {
+	cr_point_t pts[64];
+	cr_segment_t csegs[64];
+	int n = (npts < 64) ? npts : 64;
+	for (int i = 0; i < n; i++) {
+		pts[i].x = m_cachedPts[i].x();
+		pts[i].y = m_cachedPts[i].y();
+	}
+
+	int count = cr_segments_from_polyline(pts, n, csegs, 64);
+	for (int i = 0; i < count; i++) {
 		StreamSegment seg;
-		seg.a = poly[i];
-		seg.b = poly[i + 1];
-
-		qreal dx = qAbs(seg.b.x() - seg.a.x());
-		qreal dy = qAbs(seg.b.y() - seg.a.y());
-
-		if (dx < 0.001 && dy < 0.001) {
-			seg.valid = false;
-		} else if (dy < 0.001) {
-			seg.horizontal = true;
-			seg.valid = true;
-		} else if (dx < 0.001) {
-			seg.horizontal = false;
-			seg.valid = true;
-		} else {
-			seg.valid = false;
-		}
+		seg.a = QPointF(csegs[i].a.x, csegs[i].a.y);
+		seg.b = QPointF(csegs[i].b.x, csegs[i].b.y);
+		seg.horizontal = (csegs[i].horizontal == 1);
+		seg.valid      = (csegs[i].valid == 1);
 		segs.append(seg);
 	}
 	return segs;
@@ -169,6 +190,16 @@ QList<StreamItem::Crossing> StreamItem::findCrossings() const
 
 	qreal hopR = 4.0 + pen().widthF() * 0.5;
 
+	cr_segment_t myCSegs[64];
+	for (int i = 0; i < mySegs.size() && i < 64; i++) {
+		myCSegs[i].a.x = mySegs[i].a.x();
+		myCSegs[i].a.y = mySegs[i].a.y();
+		myCSegs[i].b.x = mySegs[i].b.x();
+		myCSegs[i].b.y = mySegs[i].b.y();
+		myCSegs[i].horizontal = mySegs[i].horizontal ? 1 : 0;
+		myCSegs[i].valid       = mySegs[i].valid ? 1 : 0;
+	}
+
 	for (auto* item : scene()->items()) {
 		auto* other = dynamic_cast<StreamItem*>(item);
 		if (!other || other == this) continue;
@@ -179,45 +210,25 @@ QList<StreamItem::Crossing> StreamItem::findCrossings() const
 		QList<StreamSegment> oSegs = other->segments();
 		if (oSegs.isEmpty()) continue;
 
-		for (const auto& ms : mySegs) {
-			if (!ms.valid) continue;
+		cr_segment_t oCSegs[64];
+		for (int i = 0; i < oSegs.size() && i < 64; i++) {
+			oCSegs[i].a.x = oSegs[i].a.x();
+			oCSegs[i].a.y = oSegs[i].a.y();
+			oCSegs[i].b.x = oSegs[i].b.x();
+			oCSegs[i].b.y = oSegs[i].b.y();
+			oCSegs[i].horizontal = oSegs[i].horizontal ? 1 : 0;
+			oCSegs[i].valid       = oSegs[i].valid ? 1 : 0;
+		}
 
-			for (const auto& os : oSegs) {
-				if (!os.valid) continue;
-				if (ms.horizontal == os.horizontal) continue;
+		cr_crossing_t out[64];
+		int n = cr_find_crossings(myCSegs, mySegs.size(),
+			oCSegs, oSegs.size(), hopR, out, 64);
 
-				if (ms.horizontal) {
-					qreal y = ms.a.y();
-					qreal minX = qMin(ms.a.x(), ms.b.x());
-					qreal maxX = qMax(ms.a.x(), ms.b.x());
-					qreal x = os.a.x();
-					qreal minY = qMin(os.a.y(), os.b.y());
-					qreal maxY = qMax(os.a.y(), os.b.y());
-
-					if (x > minX + hopR - 0.5 && x < maxX - hopR + 0.5 &&
-						y > minY + hopR - 0.5 && y < maxY - hopR + 0.5) {
-						Crossing c;
-						c.pt = QPointF(x, y);
-						c.onHorizontal = true;
-						result.append(c);
-					}
-				} else {
-					qreal x = ms.a.x();
-					qreal minY = qMin(ms.a.y(), ms.b.y());
-					qreal maxY = qMax(ms.a.y(), ms.b.y());
-					qreal y = os.a.y();
-					qreal minX = qMin(os.a.x(), os.b.x());
-					qreal maxX = qMax(os.a.x(), os.b.x());
-
-					if (y > minY + hopR - 0.5 && y < maxY - hopR + 0.5 &&
-						x > minX + hopR - 0.5 && x < maxX - hopR + 0.5) {
-						Crossing c;
-						c.pt = QPointF(x, y);
-						c.onHorizontal = false;
-						result.append(c);
-					}
-				}
-			}
+		for (int i = 0; i < n; i++) {
+			Crossing c;
+			c.pt = QPointF(out[i].pt.x, out[i].pt.y);
+			c.onHorizontal = (out[i].on_horizontal == 1);
+			result.append(c);
 		}
 	}
 	return result;
@@ -377,81 +388,6 @@ void StreamItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option
 			painter->drawLine(QPointF(curX, curY), seg.b);
 		}
 	}
-}
-
-QList<QPointF> StreamItem::routePath(const QRectF& rectA, const QRectF& rectB,
-	const QPointF& ptA, const QPointF& ptB,
-	char sideA, char sideB, qreal locA, qreal locB) const
-{
-	if (sideA == 'E' && sideB == 'W')
-		return linkEW(rectA, rectB, ptA, ptB, locA, locB);
-	if (sideA == 'W' && sideB == 'E')
-		return mirrorX(linkEW(
-			QRectF(-rectA.right(), rectA.y(), rectA.width(), rectA.height()),
-			QRectF(-rectB.right(), rectB.y(), rectB.width(), rectB.height()),
-			QPointF(-ptA.x(), ptA.y()),
-			QPointF(-ptB.x(), ptB.y()),
-			locA, locB));
-	if (sideA == 'E' && sideB == 'E')
-		return linkEW(rectA, rectB, ptA, ptB, locA, 1.0 - locB);
-	if (sideA == 'W' && sideB == 'W')
-		return mirrorX(linkEW(
-			QRectF(-rectA.right(), rectA.y(), rectA.width(), rectA.height()),
-			QRectF(-rectB.right(), rectB.y(), rectB.width(), rectB.height()),
-			QPointF(-ptA.x(), ptA.y()),
-			QPointF(-ptB.x(), ptB.y()),
-			locA, 1.0 - locB));
-
-	QList<QPointF> pts = { ptA };
-	qreal midX = (ptA.x() + ptB.x()) * 0.5;
-	pts.append(QPointF(midX, ptA.y()));
-	pts.append(QPointF(midX, ptB.y()));
-	pts.append(ptB);
-	return pts;
-}
-
-QList<QPointF> StreamItem::linkEW(const QRectF& ra, const QRectF& rb,
-	const QPointF& pa, const QPointF& pb,
-	qreal la, qreal lb) const
-{
-	QList<QPointF> pts;
-	pts.append(pa);
-
-	if (pb.x() > pa.x()) {
-		pts.append(QPointF(pb.x() - DIST * lb, pa.y()));
-		pts.append(QPointF(pb.x() - DIST * lb, pb.y()));
-	} else {
-		if (pb.y() < pa.y()) {
-			pts.append(QPointF(pa.x() + DIST * la, pa.y()));
-			pts.append(QPointF(pa.x() + DIST * la, ra.top() - DIST * la));
-			pts.append(QPointF(pb.x() - DIST * lb, ra.top() - DIST * la));
-			pts.append(QPointF(pb.x() - DIST * lb, pb.y()));
-		} else {
-			pts.append(QPointF(pa.x() + DIST * la, pa.y()));
-			pts.append(QPointF(pa.x() + DIST * la, ra.bottom() + DIST * la));
-			pts.append(QPointF(pb.x() - DIST * lb, ra.bottom() + DIST * la));
-			pts.append(QPointF(pb.x() - DIST * lb, pb.y()));
-		}
-	}
-
-	pts.append(pb);
-	return pts;
-}
-
-QList<QPointF> StreamItem::mirrorX(const QList<QPointF>& pts)
-{
-	QList<QPointF> result;
-	for (const auto& p : pts)
-		result.append(QPointF(-p.x(), p.y()));
-	return result;
-}
-
-QList<QPointF> StreamItem::mirrorY(const QList<QPointF>& pts)
-{
-	QList<QPointF> result;
-	for (const auto& p : pts)
-		result.append(QPointF(p.x(), -p.y()));
-	return result;
 }
 
 StreamItem::DragHandle StreamItem::hitHandle(const QPointF& scenePos) const

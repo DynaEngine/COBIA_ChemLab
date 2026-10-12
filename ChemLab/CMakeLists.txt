@@ -61,6 +61,7 @@ target_link_libraries(ChemLab PRIVATE
 	qwt::plot
 	QWindowKit
 	ChemEngine
+	ChemRouting
 )
 
 if(WIN32)

@@ -7,6 +7,8 @@
 #include <QMap>
 #include <memory>
 
+#include "chemrouting/chemrouting.h"
+
 class PortItem;
 class UnitOperationItem;
 
@@ -28,7 +30,7 @@ class StreamItem : public QGraphicsPathItem
 public:
 	StreamItem(PortItem* from, PortItem* to, QGraphicsItem* parent = nullptr);
 	StreamItem(const QPointF& start, const QPointF& end, QGraphicsItem* parent = nullptr);
-	~StreamItem() override = default;
+	~StreamItem() override;
 
 	PortItem* sourcePort() const { return m_source; }
 	PortItem* destPort() const { return m_dest; }
@@ -67,16 +69,6 @@ protected:
 	QPainterPath shape() const override;
 
 private:
-	QList<QPointF> routePath(const QRectF& rectA, const QRectF& rectB,
-		const QPointF& ptA, const QPointF& ptB,
-		char sideA, char sideB, qreal locA, qreal locB) const;
-	QList<QPointF> linkEW(const QRectF& ra, const QRectF& rb,
-		const QPointF& pa, const QPointF& pb,
-		qreal la, qreal lb) const;
-
-	static QList<QPointF> mirrorX(const QList<QPointF>& pts);
-	static QList<QPointF> mirrorY(const QList<QPointF>& pts);
-
 	struct Crossing {
 		QPointF pt;
 		bool onHorizontal;
@@ -100,6 +92,8 @@ private:
 	std::shared_ptr<ChemEngine::COBIA::CapeMaterialStream> m_materialStream;
 	std::wstring m_associatedStreamName;
 	QGraphicsTextItem* m_label = nullptr;
+	cr_routing_ctx_t* m_routingCtx = nullptr;
+	QList<QPointF> m_cachedPts;
 
 	static constexpr qreal ARROW_SIZE = 14.0;
 	static constexpr qreal HANDLE_RADIUS = 12.0;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(ChemLab VERSION 0.0.1 LANGUAGES CXX)
+project(ChemLab VERSION 0.0.1 LANGUAGES C CXX)
 
 # ============================================================================
 # Auto-detect COBIA SDK
@@ -30,6 +30,7 @@ endif()
 add_subdirectory(ChemProp)
 add_subdirectory(ChemUnit)
 add_subdirectory(ChemEngine)
+add_subdirectory(ChemRouting)
 
 set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/install/ChemLab" CACHE PATH
         "Install prefix" FORCE)
